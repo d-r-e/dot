@@ -125,13 +125,28 @@ class BrowserSession:
         self._leased = True
         try:
             self._playwright = await async_playwright().start()
-            self._browser = await self._playwright.chromium.launch(
-                headless=True, chromium_sandbox=True,
-                args=[f"--host-resolver-rules=MAP * {pinned}", "--no-proxy-server", "--disable-quic"],
-            )
+            # DataDome-backed sites (elpais.com and others) answer 403 to
+            # headless Chromium no matter which UA or JS setting we use. A
+            # headed browser gets the normal page; its window is minimized
+            # immediately so it never sits on the desktop.
+            headed = True
+            try:
+                self._browser = await self._playwright.chromium.launch(
+                    headless=False, chromium_sandbox=True,
+                    args=[f"--host-resolver-rules=MAP * {pinned}", "--no-proxy-server", "--disable-quic"],
+                )
+            except Exception:
+                # No GUI session (ssh, CI): keep the tool working headless.
+                headed = False
+                self._browser = await self._playwright.chromium.launch(
+                    headless=True, chromium_sandbox=True,
+                    args=[f"--host-resolver-rules=MAP * {pinned}", "--no-proxy-server", "--disable-quic"],
+                )
             self._host = host
             self._context = await self._browser.new_context(
-                locale="es-ES", accept_downloads=False, service_workers="block",
+                locale="es-ES", timezone_id="Europe/Madrid",
+                viewport={"width": 1440, "height": 900},
+                accept_downloads=False, service_workers="block",
             )
             await self._context.route("**/*", self._route)
             await self._context.route_web_socket("**/*", lambda connection: connection.close())
@@ -141,6 +156,15 @@ class BrowserSession:
                 }
             """)
             self._page = await self._context.new_page()
+            if headed:
+                with contextlib.suppress(Exception):
+                    cdp = await self._context.new_cdp_session(self._page)
+                    window = await cdp.send("Browser.getWindowForTarget")
+                    await cdp.send(
+                        "Browser.setWindowBounds",
+                        {"windowId": window["windowId"], "bounds": {"windowState": "minimized"}},
+                    )
+                    await cdp.detach()
             self._page.on("download", lambda download: asyncio.create_task(download.cancel()))
             self._context.on("page", lambda popup: asyncio.create_task(popup.close()))
         except BaseException:
@@ -219,6 +243,16 @@ class BrowserSession:
             content_type = response.headers.get("content-type", "").lower()
             if not any(kind in content_type for kind in ("text/html", "text/plain", "application/xhtml+xml")):
                 raise BrowseError("la URL no es una página de texto o HTML")
+            return await self._snapshot()
+
+        return await self._run(action)
+
+    async def snapshot(self) -> str:
+        """Return the current view again, with fresh refs for a new turn."""
+        if self._page is None:
+            raise BrowseError("no hay una página abierta; usa navigate(url) primero")
+
+        async def action():
             return await self._snapshot()
 
         return await self._run(action)

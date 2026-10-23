@@ -53,11 +53,14 @@ Useful env vars:
 | `BACKCHANNEL_MAX_MS` | `900` | short bursts treated as listener signals |
 | `VOICE_WARMUP` | `1` | warm Kokoro at load |
 | `VOICE_DEBUG` | off | log turn, barge and truncation decisions |
+| `DOT_THINKING` | `1` | model reasoning (`enable_thinking`); never spoken |
 | `DOT_TOOLS` | `1` | automatic emotion and headless browser tools |
 | `DOT_BROWSE` | `1` | enable the browser tools |
 | `DOT_BROWSE_TIMEOUT` | `20` | seconds per browser action |
 | `DOT_WEATHER_TIMEOUT` | `8` | seconds per weather lookup |
 | `DOT_TOOL_ROUNDS` | `6` | tool rounds allowed per turn |
+| `DOT_MAX_TOKENS` | `1024` | max completion tokens (reasoning + answer) |
+| `DOT_THINKING` | `1` | model reasoning (`enable_thinking`); never spoken |
 
 ## Invariants
 
@@ -83,10 +86,13 @@ Useful env vars:
 - **Tools:** model-driven and optional (`DOT_TOOLS=0` disables all). `emotion` only
   changes the dot; it must never alter the voice state machine. Network access is
   through `browser_tool.BrowserSession`: `browse`/`navigate`, `browser_click`,
-  `browser_type`, `browser_close`. Use Playwright's AI-mode accessibility tree and
-  `get_by_ref()`, not CSS inventories. Public HTTP(S), validated/pinned DNS,
-  same-host GET/HEAD only; no local files, LAN, passwords, uploads or downloads.
-  Browser state is per conversation; close it on cancellation/disconnect/HTTP
+  `browser_type`, `browser_snapshot`, `browser_close`. Use Playwright's AI-mode
+  accessibility tree and `get_by_ref()`, not CSS inventories. Public HTTP(S),
+  validated/pinned DNS, same-host GET/HEAD only; no local files, LAN, passwords,
+  uploads or downloads. Browser state is per conversation and persists across turns
+  while armed, so follow-up questions about a page read do not need a new URL.
+  `browser_close` is for an explicit user request, not for the model to tidy up
+  after answering; the server closes the session on cancellation/disconnect/HTTP
   completion. Never ship model-provided JavaScript, `run_code` or arbitrary eval.
   `weather(place)` is the only other network path: fixed Open-Meteo HTTPS hosts
   (geocoding + forecast), no model-supplied URL, no API key. Keep it that way;
@@ -94,9 +100,11 @@ Useful env vars:
   the prompt sends weather questions to `weather` instead of `browse`.
 - **Tool syntax:** this model writes bare `emotion{...}` / `navigate{...}` instead
   of llama.cpp's `<|tool_call>` wrapper. `tools.InlineToolParser` turns those into
-  real calls and must keep them out of the spoken reply. A blocking tool
-  (any browser action) discards the rest of that message, because the model tends to answer
-  from memory right after the call.
+  real calls and must keep them out of the spoken reply. Positional, named and bare
+  literal single-value arguments are supported. A blocking tool (any browser action)
+  discards the rest of that message, because the model tends to answer from memory
+  right after the call. Recognized but malformed calls become a parse error the model
+  recovers from; they never reach speech or the user.
 
 ## llama.cpp
 
@@ -128,10 +136,20 @@ For voice replies the request must use:
 
 ```json
 "chat_template_kwargs": {
-  "enable_thinking": false,
+  "enable_thinking": true,
   "conversational_mode": true
 }
 ```
+
+`DOT_THINKING=0` turns reasoning off. llama.cpp streams reasoning in
+`reasoning_content`, separate from `content`; it must never reach TTS, history or
+the spoken reply. It only drives the transient `pensando` hint and an
+`assistant_reasoning` entry in `.chat`.
+
+The browser runs **headed Chromium with its window minimized** via CDP: some sites
+(DataDome-backed, e.g. `elpais.com`) return 403 to every headless Chromium variant.
+Without a GUI session it falls back to headless. The window is minimized at
+creation, so it never appears on the desktop. Full details in `BROWSING.md`.
 
 ## Voice stack
 
@@ -173,7 +191,7 @@ Client → server JSON: `arm`, `disarm`, `cancel`, `stop`,
 
 Server → client JSON: `state`, `sample_rate`, `speech_started`, `partial`,
 `final`, `assistant_delta`, `tts_begin`, `tts_end`, `pause_playback`,
-`resume`, `barge_in`, `interrupted`, `cancel_playback`, `emotion`, `error`;
+`resume`, `barge_in`, `interrupted`, `cancel_playback`, `browsing`, `reasoning`, `emotion`, `error`;
 binary frames are 24 kHz int16 PCM.
 
 Barge-in is decided on the server. On speech onset it sends `pause_playback` and
@@ -210,6 +228,8 @@ wait for `ready` (no animation). Arming is remembered in
 
 - Python: 4 spaces, type hints where useful. FastAPI/httpx for the web layer;
   numpy/mlx only inside the voice engine. No frameworks in `static/`; plain HTML/CSS/JS.
-- Keep the dot UI visually minimal — no text, no chrome. Use `aria-live` for status.
+- Keep the dot UI visually minimal — no text, no chrome. The one exception is the
+  transient `browsing` pill: hostname only, no verbs or status copy, while a
+  browser tool navigates. Use `aria-live` for status.
 - `llama-server` logs go to `logs/llama.log`. Uvicorn access/error logs go to stdout
   when launched by `run.sh`.

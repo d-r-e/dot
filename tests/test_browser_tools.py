@@ -33,10 +33,12 @@ class URLTests(unittest.TestCase):
         with patch.dict("os.environ", {"DOT_TOOLS": "1", "DOT_BROWSE": "1"}):
             names = [spec["function"]["name"] for spec in tool_specs()]
         self.assertEqual(set(names), {"emotion", "weather", "browse", "navigate",
-                                      "browser_click", "browser_type", "browser_close"})
+                                      "browser_click", "browser_type",
+                                      "browser_snapshot", "browser_close"})
         for name, arguments in [("navigate", {"url": "https://example.com/"}),
                                 ("browser_click", {"ref": "e12"}),
                                 ("browser_type", {"ref": "e12", "text": "Madrid"}),
+                                ("browser_snapshot", {}),
                                 ("browser_close", {}),
                                 ("weather", {"place": "Madrid"})]:
             parser = InlineToolParser(names)
@@ -63,6 +65,10 @@ class GuardTests(unittest.IsolatedAsyncioTestCase):
                     await public_address("public-looking.example")
         with patch.object(loop, "getaddrinfo", AsyncMock(return_value=[entry("8.8.8.8")])):
             self.assertEqual(await public_address("public-looking.example"), "8.8.8.8")
+
+    async def test_snapshot_requires_an_open_page(self):
+        with self.assertRaises(BrowseError):
+            await BrowserSession().snapshot()
 
     async def test_request_guard(self):
         session = BrowserSession()

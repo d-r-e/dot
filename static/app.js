@@ -9,6 +9,8 @@ import { createPresence } from "./presence.js";
 
 const dot = document.getElementById("dot");
 const statusEl = document.getElementById("status");
+const hintEl = document.getElementById("hint");
+const hintTextEl = document.getElementById("hint-text");
 const presence = createPresence(dot);
 
 const VOICE_STATES = new Set([
@@ -42,6 +44,8 @@ let ttsRate = 24000;
 let turn = null;
 let playTimer = null;
 let booted = false;
+let browsingHost = "";
+let reasoningActive = false;
 
 function render() {
   const raw = llamaState === "error" ? "error" :
@@ -54,6 +58,7 @@ function render() {
   statusEl.textContent = labelFor(state);
   // Preserve technical diagnostics without announcing English server details.
   dot.dataset.detail = voiceDetail || llamaDetail || state;
+  renderHint();
 }
 
 function labelFor(state) {
@@ -83,6 +88,36 @@ function setVoiceState(state, detail = "") {
 
 function flashEmotion(name) {
   presence.emotion(name);
+}
+
+// One line under the dot: a hostname while a page opens, "pensando" while
+// the model reasons. Never two at once; the hostname wins.
+function renderHint() {
+  const thinking = reasoningActive || voiceState === "thinking";
+  const text = browsingHost || (thinking ? "pensando" : "");
+  if (!text) {
+    hintEl.classList.remove("is-on");
+    return;
+  }
+  hintTextEl.textContent = text;
+  hintEl.dataset.mode = browsingHost ? "browsing" : "thinking";
+  hintEl.classList.add("is-on");
+}
+
+function showBrowsing(host) {
+  browsingHost = typeof host === "string" ? host : "";
+  renderHint();
+}
+
+function setReasoning(active) {
+  reasoningActive = active === true;
+  renderHint();
+}
+
+function clearHint() {
+  browsingHost = "";
+  reasoningActive = false;
+  renderHint();
 }
 
 function clearEmotion() {
@@ -473,6 +508,12 @@ function connectVoice() {
       case "emotion":
         flashEmotion(message.value);
         break;
+      case "browsing":
+        showBrowsing(typeof message.host === "string" ? message.host : "");
+        break;
+      case "reasoning":
+        setReasoning(message.active === true);
+        break;
       case "tts_begin":
         newTurn(message.turn_id);
         break;
@@ -499,12 +540,14 @@ function connectVoice() {
           );
         }
         discardTurn();
+        clearHint();
         setVoiceState("listening", "listening");
         break;
       }
       case "cancel_playback":
         discardTurn();
         clearEmotion();
+        clearHint();
         break;
       case "interrupted":
       case "tts_end":
@@ -526,6 +569,7 @@ function connectVoice() {
     armed = false;
     presence.clear();
     presence.attentive(false);
+    clearHint();
     cancelPlayback();
     if (voiceState !== "error") setVoiceState(null, "");
     render();
@@ -586,6 +630,7 @@ function disarm() {
   voiceReady = false;
   clearEmotion();
   presence.attentive(false);
+  clearHint();
   try {
     localStorage.removeItem(ARMED_KEY);
   } catch {

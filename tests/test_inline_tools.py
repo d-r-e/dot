@@ -26,6 +26,11 @@ class ParenthesizedToolTests(unittest.TestCase):
             ('emotion("smile")', "emotion", {"name": "smile"}),
             ('weather("Valencia, España")', "weather", {"place": "Valencia, España"}),
             ("weather(place='Madrid')", "weather", {"place": "Madrid"}),
+            ("weather(San Sebastián)", "weather", {"place": "San Sebastián"}),
+            ("emotion(happy)", "emotion", {"name": "happy"}),
+            ("navigate(https://www.reddit.com)", "navigate",
+             {"url": "https://www.reddit.com"}),
+            ("navigate(reddit.com)", "navigate", {"url": "reddit.com"}),
             ('navigate({"url":"https://example.com"})', "navigate", {"url": "https://example.com"}),
             ('navigate{url:<|"|>https://example.com<|"|>}', "navigate", {"url": "https://example.com"}),
         ]

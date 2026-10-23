@@ -1,4 +1,4 @@
-# Headless browsing and accessibility refs
+# Browsing and accessibility refs
 
 ## Why replace web_search?
 
@@ -15,7 +15,8 @@ been removed rather than presented as reliable search.
 | `browse` / `navigate` | `url` | Navigate and return an accessibility snapshot |
 | `browser_click` | `ref` | Click the referenced element and return a fresh snapshot |
 | `browser_type` | `ref`, `text` | Fill a field; no Enter or automatic submission |
-| `browser_close` | none | Close the browser and discard its temporary state |
+| `browser_snapshot` | none | Return the current view again with fresh refs |
+| `browser_close` | none | Close the browser; only on an explicit user request |
 | `weather` | `place` | Open-Meteo current conditions and three-day forecast |
 
 Every browser action is a blocking tool: any answer the model invents after
@@ -68,16 +69,29 @@ fixed hosts is the place name.
 - One fresh browser/context per conversation, created lazily, never the user's
   Chrome profile. Same-host actions preserve page state and temporary cookies.
   Switching host with `navigate` creates a fresh browser/context.
+- The browser is **headed Chromium with its window minimized** through CDP. Some
+  sites, including `elpais.com` (DataDome), return 403 to every headless Chromium
+  variant; a headed browser gets the normal page. If no GUI session exists (ssh,
+  CI), the tool falls back to headless and those sites stay blocked.
 - HTTP requests close their browser after the tool loop. Voice connections retain
-  it until `browser_close`, cancellation of an active browser action, or disconnect.
+  it across turns so the model can keep reading; the server closes it on
+  cancellation, disconnect or conversation end. `browser_close` exists for an
+  explicit user request, not for the model to tidy up after every answer.
   At most two browser sessions are live simultaneously.
+- The model only sees the accessibility tree returned by the last tool call.
+  `browser_snapshot` re-reads the current page with fresh refs at the start of a
+  new voice turn, so follow-ups do not have to reopen the URL or ask the user for
+  references.
 - URLs require HTTP(S), standard ports and no credentials. DNS answers must all
   be public, non-reserved addresses. Chromium DNS is pinned to a validated IP;
   ambient proxy settings are disabled. Numeric/local-address tricks, mixed
   public/private DNS answers and known IPv6 transition prefixes are rejected.
 - Each request is checked: only the selected host and GET/HEAD are allowed.
   Other-host redirects return the destination for an explicit new `navigate`;
-  private destinations are rejected. Third-party scripts/assets are blocked.
+  private destinations are rejected. Third-party assets and all WebSockets are
+  blocked, and page scripts cannot use WebRTC/WebTransport. Site JavaScript still
+  runs: disabling it does not defeat DataDome (the 403 arrives before scripts) and
+  breaks normal pages.
 - No password filling, file pickers, uploads, downloads or model-provided eval.
   Popups, service workers and WebSockets are blocked; WebRTC/WebTransport APIs
   are disabled in page scripts. Chromium's sandbox remains enabled.
@@ -99,18 +113,19 @@ No raw audio, user-browser cookies or profiles are used by this wrapper.
 
 ## Setup and tests
 
-`run.sh` installs the pinned Python dependency and Chromium's headless shell when
-bootstrapping/updating dependencies. To install the browser explicitly:
+`run.sh` installs the pinned Python dependency and the full Chromium build when
+bootstrapping/updating dependencies (the headed browser needs it). To install the
+browser explicitly:
 
 ```bash
-.venv/bin/python -m playwright install --only-shell chromium
+.venv/bin/python -m playwright install chromium
 .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 Tests exercise real Chromium against intercepted fixture pages (no network
 required): semantic labels and `aria-label`, hidden controls, typing without
-submission, clicking through a GET form, current refs, password/private navigation
-blocking, antibot errors, cancellation and closing. Additional unit tests cover
+submission, clicking through a GET form, current refs, `browser_snapshot`,
+password/private navigation blocking, antibot errors, cancellation and closing. Additional unit tests cover
 DNS policy, disabled tools, URL validation, streamed inline calls for each action,
 and transcript logging. Live engine output is never treated as a test fixture.
 
@@ -131,8 +146,8 @@ refuse to open it because it recognizes `.example`. A separate live streaming
 check verifies navigation becomes tool events, not spoken URLs; it does not test
 microphone capture or audible playback. Model responses are stochastic.
 
-Inline recovery supports both `navigate("https://…")` (positional or named
-literal arguments) and the older Gemma-style `navigate{url:…}` syntax. Literal
+Inline recovery supports both `navigate("https://…")` (quoted, positional, named
+or bare literal arguments) and the older Gemma-style `navigate{url:…}` syntax. Literal
 decoding never executes code. Incomplete/malformed recognized calls are kept out
 of speech. Parser regression tests cover every stream split boundary, escaping,
 nested delimiters, both formats and multiple calls.

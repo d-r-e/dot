@@ -68,7 +68,7 @@ class CoreConversations(unittest.IsolatedAsyncioTestCase):
                             "por el navegador disponible. Ábrelo para observar su contenido; "
                             "no supongas que no existe por su nombre."})
         history.append({"role": "user", "content": text})
-        response = await self.client.post("/api/chat", json={"messages": list(history), "max_tokens": 350})
+        response = await self.client.post("/api/chat", json={"messages": list(history), "max_tokens": 1024})
         self.assertEqual(response.status_code, 200, response.text)
         data = response.json()
         answer = data["choices"][0]["message"].get("content") or ""
@@ -127,7 +127,7 @@ class CoreConversations(unittest.IsolatedAsyncioTestCase):
         events = [event async for event in app.stream_llm([
             {"role": "system", "content": app.system_prompt()},
             {"role": "user", "content": "¿Qué tiempo hace mañana en Madrid?"},
-        ], max_tokens=250, tools=tool_specs())]
+        ], max_tokens=1024, tools=tool_specs())]
         calls = [event for event in events if event["type"] == "tool_call"]
         speech = ''.join(event["text"] for event in events if event["type"] == "text")
         print(json.dumps({"weather_speech": speech, "calls": calls}, ensure_ascii=False), flush=True)
@@ -139,7 +139,7 @@ class CoreConversations(unittest.IsolatedAsyncioTestCase):
         events = [event async for event in app.stream_llm([
             {"role": "system", "content": app.system_prompt()},
             {"role": "user", "content": "Abre https://fixture.example/library y comprueba el horario de los sábados."},
-        ], max_tokens=250, tools=tool_specs())]
+        ], max_tokens=1024, tools=tool_specs())]
         calls = [event for event in events if event["type"] == "tool_call"]
         speech = ''.join(event["text"] for event in events if event["type"] == "text")
         print(json.dumps({"voice_speech": speech, "calls": calls}, ensure_ascii=False), flush=True)

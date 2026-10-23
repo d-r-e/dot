@@ -82,7 +82,7 @@ EMOTION_ALIASES.update(SPANISH_ALIASES)
 # Tools whose result the model needs before it can answer. A call to one of
 # these suppresses the rest of that message: the model tends to answer from
 # memory right after the call, and that guess must not be spoken.
-BLOCKING_TOOLS = {"browse", "navigate", "browser_click", "browser_type", "browser_close", "weather"}
+BLOCKING_TOOLS = {"browse", "navigate", "browser_click", "browser_type", "browser_snapshot", "browser_close", "weather"}
 
 _QUOTE_TOKEN = '<|"|>'
 _LEADING_EMOTION_RE = re.compile(
@@ -174,7 +174,8 @@ def tool_specs() -> list[dict[str, Any]]:
             ("browser_click", "Pulsa un elemento por su referencia ARIA exacta de la última vista y devuelve el nuevo árbol de accesibilidad. Solo navegación GET/HEAD; no pagos, cuentas ni envíos POST.", ref),
             ("browser_type", "Rellena un campo de la última vista sin pulsar Enter ni enviar el formulario. No contraseñas ni archivos. Devuelve el árbol de accesibilidad actualizado.",
              {**ref, "text": {"type": "string", "maxLength": 2000, "description": "Texto que se escribirá, sustituyendo el contenido anterior."}}),
-            ("browser_close", "Cierra el navegador y descarta su sesión, cookies y referencias cuando termines.", {}),
+            ("browser_snapshot", "Vuelve a devolver el árbol de accesibilidad de la vista actual con referencias frescas. Úsala al empezar a hablar de una página ya abierta o cuando necesites pulsar o escribir y no tengas la última vista.", {}),
+            ("browser_close", "Cierra el navegador solo si el usuario lo pide expresamente. No la llames al terminar una consulta: la sesión se conserva para las siguientes preguntas. El servidor la cierra al final de la conversación.", {}),
         ]:
             specs.append({
                 "type": "function",
@@ -231,17 +232,29 @@ def parse_inline_arguments(body: str) -> Optional[dict[str, Any]]:
 _POSITIONAL_ARGS = {
     "navigate": ("url",), "browse": ("url",),
     "browser_click": ("ref",), "browser_type": ("ref", "text"),
-    "browser_close": (), "emotion": ("name",), "weather": ("place",),
+    "browser_snapshot": (), "browser_close": (), "emotion": ("name",), "weather": ("place",),
 }
 
 
 def parse_parenthesized_arguments(name: str, body: str) -> Optional[dict[str, Any]]:
     """Decode literal call arguments only; never evaluate model-supplied code."""
+    text = body.replace(_QUOTE_TOKEN, '"').strip()
+    keys = _POSITIONAL_ARGS.get(name.lower(), ())
+    # This model often leaves the single positional value unquoted:
+    # navigate(https://www.reddit.com), weather(Madrid), emotion(happy).
+    # Treat it as the literal string it is; never evaluate it.
+    if (
+        text
+        and len(keys) == 1
+        and text[0].isalnum()
+        and not any(char in text for char in "{}\"'()")
+        and not re.match(r"^(?:" + "|".join(map(re.escape, keys)) + r")\s*[:=]", text, re.I)
+    ):
+        return {keys[0]: text}
     try:
-        call = ast.parse("tool(" + body.replace(_QUOTE_TOKEN, '"') + ")", mode="eval").body
+        call = ast.parse("tool(" + text + ")", mode="eval").body
         if not isinstance(call, ast.Call):
             return None
-        keys = _POSITIONAL_ARGS.get(name.lower(), ())
         # Also accept navigate({"url": "..."}).
         if len(call.args) == 1 and isinstance(call.args[0], ast.Dict) and not call.keywords:
             value = ast.literal_eval(call.args[0])
@@ -480,6 +493,8 @@ class Toolbox:
                 return await self.browser.click(args.get("ref", ""))
             if name == "browser_type":
                 return await self.browser.type(args.get("ref", ""), args.get("text", ""))
+            if name == "browser_snapshot":
+                return await self.browser.snapshot()
             if name == "browser_close":
                 return await self.browser.close()
             return f"error: herramienta desconocida: {name or '(ninguna)'}"
