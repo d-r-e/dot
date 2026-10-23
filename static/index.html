@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#090a10" />
+    <title>dot</title>
+    <link rel="stylesheet" href="/static/style.css?v=5" />
+  </head>
+  <body>
+    <main>
+      <button id="dot" class="dot" type="button" data-state="starting" aria-label="Asistente local">
+        <span class="dot-body" aria-hidden="true">
+          <span class="dot-halo"></span>
+          <span class="dot-ring"></span>
+          <span class="dot-voice"><span class="dot-core"></span></span>
+        </span>
+        <span id="status" class="sr-only" role="status" aria-live="polite">Iniciando</span>
+      </button>
+    </main>
+    <script src="/static/app.js?v=5" type="module"></script>
+  </body>
+</html>

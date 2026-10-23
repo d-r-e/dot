@@ -1,0 +1,437 @@
+/* Typed channels interpolate through blue/indigo/violet, never through red.
+   Inheritance keeps the core, halo and perimeter on exactly the same palette. */
+@property --dot-hue {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 250;
+}
+
+@property --dot-saturation {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 82%;
+}
+
+@property --dot-lightness {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 62%;
+}
+
+:root {
+  color-scheme: dark;
+  --bg: #090a10;
+  --ease-settle: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  display: grid;
+  place-items: center;
+  min-height: 100svh;
+  overflow: hidden;
+  background: radial-gradient(ellipse at 50% 48%, #111223 0%, var(--bg) 58%);
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+main {
+  display: grid;
+  place-items: center;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The control never moves. Only its decorative layers breathe. */
+.dot {
+  --core-size: clamp(80px, 12vmin, 104px);
+  --dot-hue: 250;
+  --dot-saturation: 82%;
+  --dot-lightness: 62%;
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: calc(var(--core-size) + 64px);
+  aspect-ratio: 1;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  color: hsl(var(--dot-hue) var(--dot-saturation) var(--dot-lightness));
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.dot:focus-visible {
+  outline: 2px solid #dddfff;
+  outline-offset: 5px;
+}
+
+.dot-core,
+.dot-halo,
+.dot-ring,
+.dot-body,
+.dot-voice {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.dot-body,
+.dot-voice {
+  display: grid;
+  place-items: center;
+  width: var(--core-size);
+  aspect-ratio: 1;
+}
+
+.dot-core {
+  width: var(--core-size);
+  aspect-ratio: 1;
+  background: radial-gradient(circle at 38% 30%,
+    hsl(var(--dot-hue) var(--dot-saturation) calc(var(--dot-lightness) + 15%)) 0%,
+    hsl(var(--dot-hue) var(--dot-saturation) calc(var(--dot-lightness) + 3%)) 34%,
+    hsl(var(--dot-hue) var(--dot-saturation) calc(var(--dot-lightness) - 6%)) 68%,
+    hsl(var(--dot-hue) var(--dot-saturation) calc(var(--dot-lightness) - 20%)) 100%);
+  box-shadow:
+    inset 0 1px 2px hsl(var(--dot-hue) 85% 90% / 0.3),
+    inset 0 -3px 7px hsl(var(--dot-hue) 70% 20% / 0.15),
+    0 0 18px hsl(var(--dot-hue) 90% 60% / 0.07);
+}
+
+/* Surface light makes a tilt legible even on a circular silhouette. */
+.dot-core::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(ellipse at 32% 24%, #e3eaff66, transparent 62%);
+  opacity: 0.2;
+}
+
+/* A broad, pre-painted glow: animate its opacity, not its blur radius. */
+.dot-halo {
+  width: calc(var(--core-size) * 2.8);
+  aspect-ratio: 1;
+  background: radial-gradient(circle,
+    hsl(var(--dot-hue) var(--dot-saturation) var(--dot-lightness) / 0.16) 0%,
+    hsl(var(--dot-hue) var(--dot-saturation) var(--dot-lightness) / 0.1) 28%,
+    hsl(var(--dot-hue) var(--dot-saturation) var(--dot-lightness) / 0.035) 46%,
+    transparent 70%);
+  opacity: 0.65;
+}
+
+.dot-ring {
+  width: calc(var(--core-size) + 22px);
+  aspect-ratio: 1;
+  border: 1px solid currentColor;
+  opacity: 0;
+}
+
+/* Conversation colors are the resting palette; expressions override them. */
+.dot:is([data-state="starting"], [data-state="loading_voice"]) {
+  --dot-hue: 244;
+  --dot-saturation: 55%;
+  --dot-lightness: 54%;
+}
+
+.dot[data-state="listening"] {
+  --dot-hue: 216;
+  --dot-saturation: 88%;
+  --dot-lightness: 61%;
+}
+
+.dot[data-state="thinking"] {
+  --dot-hue: 265;
+  --dot-saturation: 80%;
+  --dot-lightness: 61%;
+}
+
+.dot[data-state="speaking"] {
+  --dot-hue: 244;
+  --dot-saturation: 90%;
+  --dot-lightness: 66%;
+}
+
+.dot[data-emotion="smile"] {
+  --dot-hue: 262;
+  --dot-saturation: 90%;
+  --dot-lightness: 70%;
+}
+
+.dot[data-emotion="sad"] {
+  --dot-hue: 225;
+  --dot-saturation: 48%;
+  --dot-lightness: 47%;
+}
+
+.dot[data-emotion="surprise"] {
+  --dot-hue: 207;
+  --dot-saturation: 100%;
+  --dot-lightness: 70%;
+}
+
+.dot[data-emotion="ask"] {
+  --dot-hue: 238;
+  --dot-saturation: 86%;
+  --dot-lightness: 65%;
+}
+
+.dot[data-emotion="angry"] {
+  --dot-hue: 278;
+  --dot-saturation: 83%;
+  --dot-lightness: 50%;
+}
+
+.dot[data-emotion="laugh"] {
+  --dot-hue: 272;
+  --dot-saturation: 94%;
+  --dot-lightness: 67%;
+}
+
+/* Error wins even if a stale emotion attribute survives a disconnect. */
+.dot[data-state="error"] {
+  --dot-hue: 256;
+  --dot-saturation: 30%;
+  --dot-lightness: 42%;
+}
+
+/* Static state signatures also work when motion is disabled. */
+.dot:is([data-state="starting"], [data-state="loading_voice"]) .dot-core {
+  opacity: 0.72;
+}
+
+.dot:is([data-state="starting"], [data-state="loading_voice"]) .dot-ring {
+  border-style: dotted;
+  opacity: 0.2;
+}
+
+.dot[data-state="listening"] .dot-ring {
+  opacity: 0.45;
+}
+
+.dot[data-state="listening"] .dot-halo {
+  opacity: 1;
+}
+
+.dot[data-state="thinking"] .dot-ring {
+  border-style: dashed;
+  opacity: 0.5;
+}
+
+.dot[data-state="speaking"] .dot-ring {
+  border-style: double;
+  border-width: 3px;
+  opacity: 0.3;
+}
+
+.dot[data-state="speaking"] .dot-halo {
+  opacity: 1;
+}
+
+.dot[data-state="error"] .dot-core {
+  box-shadow: inset 0 1px 2px #dedbff26;
+}
+
+.dot[data-state="error"] .dot-halo {
+  opacity: 0.12;
+}
+
+.dot[data-state="error"] .dot-ring {
+  border-style: dashed;
+  border-width: 2px;
+  opacity: 0.6;
+}
+
+/* Expressions have a quiet, static light signature even with reduced motion.
+   Transform layers: body = gesture, voice = real audio, core = loading/press. */
+.dot[data-emotion="smile"] .dot-core::after,
+.dot[data-emotion="laugh"] .dot-core::after {
+  opacity: 0.85;
+}
+
+.dot[data-emotion="sad"] .dot-core {
+  opacity: 0.72;
+}
+
+.dot[data-emotion="surprise"] .dot-core::after {
+  opacity: 1;
+}
+
+.dot[data-emotion="ask"] .dot-core::after {
+  background: radial-gradient(ellipse at 68% 25%, #e3eaff80, transparent 65%);
+  opacity: 0.75;
+}
+
+.dot[data-emotion="angry"] .dot-core::after {
+  background: radial-gradient(ellipse at 50% 85%, #a64aff80, transparent 70%);
+  opacity: 0.8;
+}
+
+.dot[data-attentive="true"] .dot-ring {
+  border-style: solid;
+  border-width: 2px;
+  opacity: 0.65;
+}
+
+.dot[data-paused="true"][data-state="speaking"] .dot-ring {
+  border-style: solid;
+  border-width: 1px;
+  opacity: 0.35;
+}
+
+/* Opt in to motion. Every loop changes only transform and opacity. */
+@media (prefers-reduced-motion: no-preference) {
+  .dot {
+    transition: --dot-hue 650ms ease, --dot-saturation 650ms ease, --dot-lightness 650ms ease;
+  }
+
+  .dot-core {
+    transition: scale 160ms var(--ease-settle), transform 220ms var(--ease-settle), opacity 280ms ease;
+  }
+
+  .dot-core::after {
+    transition: opacity 300ms ease;
+  }
+
+  /* A barely perceptible breath only while the conversation is armed.
+     Unarmed ready remains completely still. */
+  .dot[data-armed="true"][data-state="ready"] .dot-core {
+    animation: available 5.4s ease-in-out infinite;
+  }
+
+  .dot-halo {
+    transition: opacity 400ms ease;
+  }
+
+  .dot-ring {
+    transition: opacity 280ms ease;
+  }
+
+  .dot:is([data-state="starting"], [data-state="loading_voice"]) .dot-core {
+    animation: kindle 2.6s ease-in-out infinite;
+  }
+
+  .dot:is([data-state="starting"], [data-state="loading_voice"]) .dot-halo {
+    animation: warmth 2.6s ease-in-out infinite;
+  }
+
+  .dot[data-state="listening"] .dot-ring {
+    animation: listen 3.6s ease-in-out infinite;
+  }
+
+  .dot[data-state="thinking"] .dot-ring {
+    border-style: solid;
+    border-color: hsl(var(--dot-hue) var(--dot-saturation) var(--dot-lightness) / 0.07);
+    border-top-color: hsl(var(--dot-hue) var(--dot-saturation) calc(var(--dot-lightness) + 15%));
+    border-right-color: hsl(var(--dot-hue) var(--dot-saturation) var(--dot-lightness) / 0.44);
+    animation: orbit 2s linear infinite;
+    opacity: 0.7;
+  }
+
+  .dot[data-state="speaking"] .dot-ring {
+    border-style: solid;
+    border-width: 1px;
+    opacity: 0.16;
+  }
+
+  .dot[data-attentive="true"] .dot-ring {
+    animation: attend 2.8s ease-in-out infinite;
+  }
+
+  .dot[data-paused="true"][data-state="speaking"] .dot-ring {
+    animation: none;
+  }
+
+  /* Pointer feedback is independent of the core's state animation. */
+  @media (hover: hover) {
+    .dot:hover .dot-halo {
+      transform: scale(1.12);
+    }
+    .dot-halo {
+      transition: opacity 400ms ease, transform 400ms var(--ease-settle);
+    }
+  }
+
+  .dot:active .dot-core {
+    /* Individual scale composes with the animated transform. */
+    scale: 0.95;
+  }
+
+}
+
+@keyframes kindle {
+  0%, 100% { transform: scale(0.97); opacity: 0.6; }
+  50% { transform: scale(1.015); opacity: 0.95; }
+}
+
+@keyframes warmth {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+
+@keyframes listen {
+  0%, 100% { transform: scale(1); opacity: 0.25; }
+  50% { transform: scale(1.055); opacity: 0.5; }
+}
+
+@keyframes orbit {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes available {
+  0%, 100% { transform: scale(1); }
+  42% { transform: scale(1.012, 1.018); }
+  65% { transform: scale(1.006, 1.009); }
+}
+
+@keyframes attend {
+  0%, 100% { transform: scale(0.97); opacity: 0.5; }
+  45% { transform: scale(1.025); opacity: 0.7; }
+}
+
+@media (forced-colors: active) {
+  .dot-core {
+    background: ButtonText;
+    box-shadow: none;
+  }
+  .dot-halo {
+    display: none;
+  }
+  .dot-core::after {
+    display: none;
+  }
+  .dot-ring {
+    color: ButtonText;
+    border-color: ButtonText;
+  }
+  .dot[data-state="error"] .dot-core {
+    background: ButtonFace;
+    border: 2px solid ButtonText;
+  }
+  .dot:focus-visible {
+    outline-color: Highlight;
+  }
+}
