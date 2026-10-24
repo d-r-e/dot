@@ -4,7 +4,7 @@ Tools are disabled or enabled by environment variables (see the README).
 Results are plain text because one small local model reads them;
 JSON adds noise and the model is constrained to short spoken replies.
 
-Browser tools share an isolated Chromium session per conversation.
+Browser tools share an isolated Playwright MCP session per conversation.
 Weather uses Open-Meteo's fixed endpoints, so a plain "¿qué tiempo hace?" never
 depends on a search engine. Failures are explicit; a blocked page is never
 treated as a search result.
@@ -17,9 +17,12 @@ import asyncio
 import json
 import os
 import re
+from datetime import datetime
 from typing import Any, Awaitable, Callable, Optional
+from zoneinfo import ZoneInfo
 
-from browser_tool import BrowseError, BrowserSession
+from browser_tool import BrowseError
+from mcp_browser import MCPBrowserSession, browser_specs, discover_tools
 from weather_tool import WeatherError, weather as lookup_weather
 
 EMOTIONS = ("smile", "sad", "surprise", "ask", "angry", "laugh")
@@ -82,7 +85,7 @@ EMOTION_ALIASES.update(SPANISH_ALIASES)
 # Tools whose result the model needs before it can answer. A call to one of
 # these suppresses the rest of that message: the model tends to answer from
 # memory right after the call, and that guess must not be spoken.
-BLOCKING_TOOLS = {"browse", "navigate", "browser_click", "browser_type", "browser_snapshot", "browser_close", "weather"}
+BLOCKING_TOOLS = {"browse", "navigate", "browser_click", "browser_type", "browser_snapshot", "browser_close", "weather", "current_time"}
 
 _QUOTE_TOKEN = '<|"|>'
 _LEADING_EMOTION_RE = re.compile(
@@ -116,6 +119,11 @@ def tool_specs() -> list[dict[str, Any]]:
         return []
 
     specs: list[dict[str, Any]] = [
+        {"type": "function", "function": {
+            "name": "current_time",
+            "description": "Consulta la fecha y hora actuales del reloj local en España (Europe/Madrid). Úsala para hoy, la fecha o la hora actual; no las adivines.",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        }},
         {
             "type": "function",
             "function": {
@@ -185,7 +193,22 @@ def tool_specs() -> list[dict[str, Any]]:
                 }},
             })
 
+        native = browser_specs()
+        if native:
+            native_names = {spec["function"]["name"] for spec in native}
+            specs = [spec for spec in specs if spec["function"]["name"] not in native_names]
+            specs.extend(native)
+            for spec in native:
+                function = spec["function"]
+                BLOCKING_TOOLS.add(function["name"])
+                _POSITIONAL_ARGS[function["name"]] = tuple(function["parameters"].get("required", ()))
+
     return specs
+
+
+async def prepare_tools() -> None:
+    if tools_enabled() and _flag("DOT_BROWSE", _flag("DOT_SEARCH", True)):
+        await discover_tools()
 
 
 def _parse_args(arguments: Any) -> dict[str, Any]:
@@ -232,7 +255,7 @@ def parse_inline_arguments(body: str) -> Optional[dict[str, Any]]:
 _POSITIONAL_ARGS = {
     "navigate": ("url",), "browse": ("url",),
     "browser_click": ("ref",), "browser_type": ("ref", "text"),
-    "browser_snapshot": (), "browser_close": (), "emotion": ("name",), "weather": ("place",),
+    "browser_snapshot": (), "browser_close": (), "emotion": ("name",), "weather": ("place",), "current_time": (),
 }
 
 
@@ -467,7 +490,7 @@ class Toolbox:
         emit: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> None:
         self.emit = emit
-        self.browser = BrowserSession()
+        self.browser = MCPBrowserSession()
 
     async def close(self) -> None:
         await self.browser.close()
@@ -485,18 +508,26 @@ class Toolbox:
                 return "error: argumentos malformados; vuelve a llamar con valores literales y los parámetros indicados"
             if name == "emotion":
                 return await self._emotion(args)
+            if name == "current_time":
+                now = datetime.now(ZoneInfo("Europe/Madrid"))
+                return (now.isoformat(timespec="seconds") + " [Europe/Madrid]\n"
+                        + f"Hora exacta para responder (HH:MM): {now:%H:%M}. Fecha: {now:%Y-%m-%d}.")
             if name == "weather":
                 return await lookup_weather(args.get("place", ""))
             if name in {"browse", "navigate"}:
                 return await self.browser.navigate(args.get("url", ""))
             if name == "browser_click":
-                return await self.browser.click(args.get("ref", ""))
+                return await self.browser.click(args.get("target", args.get("ref", "")))
             if name == "browser_type":
-                return await self.browser.type(args.get("ref", ""), args.get("text", ""))
+                if args.get("submit") or args.get("slowly"):
+                    raise ToolError("solo rellenado sin enviar formularios")
+                return await self.browser.type(args.get("target", args.get("ref", "")), args.get("text", ""))
             if name == "browser_snapshot":
                 return await self.browser.snapshot()
             if name == "browser_close":
                 return await self.browser.close()
+            if name.startswith("browser_"):
+                return await self.browser.call(name, args)
             return f"error: herramienta desconocida: {name or '(ninguna)'}"
         except (ToolError, BrowseError, WeatherError) as exc:
             return f"error: {exc}"

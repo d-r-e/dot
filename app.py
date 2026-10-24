@@ -27,7 +27,7 @@ from starlette.staticfiles import StaticFiles
 
 from chat_log import ChatLog
 from llama_manager import LlamaManager
-from tools import BLOCKING_TOOLS, InlineToolParser, Toolbox, tool_specs
+from tools import BLOCKING_TOOLS, InlineToolParser, Toolbox, prepare_tools, tool_specs
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
@@ -45,8 +45,10 @@ SYSTEM_PROMPT = (
 
 # Only appended when tools are enabled, so the plain prompt stays unchanged.
 TOOL_HINT = (
-    " Puedes llamar herramientas: navigate(url) o browse(url) para leer una página pública y "
+    " Puedes llamar herramientas: browser_navigate(url) para leer una página pública y "
     "verificar datos actuales, y emotion para mostrar una expresión breve. "
+    "Para la fecha u hora actual, usa current_time(): reloj de España, Europe/Madrid. "
+    "Conserva exactamente la hora devuelta en formato HH:MM, sin redondear ni cambiar los minutos. "
     "Para cualquier pregunta sobre el tiempo, llama a weather(place) con la "
     "ciudad; no necesitas una URL ni la ubicación del dispositivo, y no pidas "
     "una URL para el tiempo. "
@@ -55,9 +57,9 @@ TOOL_HINT = (
     "(reddit.com, wikipedia.org) sin pedirle la URL. "
     "No abras buscadores como Google, "
     "Bing o Qwant: bloquean la lectura automática y no devuelven resultados. "
-    "Llama de verdad a browse antes de afirmar que has comprobado un dato. "
+    "Llama de verdad a browser_navigate antes de afirmar que has comprobado un dato. "
     "Si hay un bloqueo o error, dilo; no inventes una respuesta actual. "
-    "Usa browser_click(ref) y browser_type(ref,text) solo con referencias de "
+    "Usa browser_click(target) y browser_type(target,text) solo con referencias de "
     "el árbol de accesibilidad de la última vista; no inventes selectores CSS "
     "ni referencias y nunca pidas referencias al usuario. Si no tienes la "
     "vista actual, llama browser_snapshot(). browser_type no envía "
@@ -74,6 +76,39 @@ def system_prompt() -> str:
     return SYSTEM_PROMPT + TOOL_HINT if tool_specs() else SYSTEM_PROMPT
 
 
+def voice_context(value: Any) -> Optional[list[dict]]:
+    """Restore browser-owned conversation, never system/tool instructions."""
+    if not isinstance(value, list) or len(value) > 16:
+        return None
+    if any(not isinstance(item, dict) or item.get("role") not in ("user", "assistant")
+           or not isinstance(item.get("content"), str) or len(item["content"]) > 8000
+           for item in value):
+        return None
+    if sum(len(item["content"]) for item in value) > 32000:
+        return None
+    return [{"role": item["role"], "content": item["content"]} for item in value[-8:]]
+
+
+class ChatDisconnected(Exception):
+    """The text client cancelled; do not keep generating or running tools."""
+
+
+async def while_connected(request: Request, operation):
+    task = asyncio.create_task(operation)
+    try:
+        while True:
+            if await request.is_disconnected():
+                raise ChatDisconnected()
+            done, _ = await asyncio.wait({task}, timeout=0.1)
+            if done:
+                return task.result()
+    finally:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
 try:
     TOOL_ROUNDS = max(0, int(os.environ.get("DOT_TOOL_ROUNDS", "6")))
 except ValueError:
@@ -86,6 +121,7 @@ except ValueError:
 
 TOOL_LABELS = {
     "browse": "consultando una página", "navigate": "consultando una página",
+    "browser_navigate": "consultando una página",
     "browser_click": "abriendo un enlace", "browser_type": "escribiendo en la página",
     "browser_snapshot": "leyendo la página",
     "weather": "consultando el tiempo",
@@ -121,7 +157,7 @@ def browsing_host(name: str, arguments: Any) -> Optional[str]:
     The URL still passes the browser's own validation. This only extracts a
     short, safe label, so a malformed call never reaches the UI as markup.
     """
-    if name not in {"browse", "navigate"}:
+    if name not in {"browse", "navigate", "browser_navigate"}:
         return None
     try:
         args = json.loads(arguments) if isinstance(arguments, str) else arguments
@@ -165,6 +201,7 @@ async def lifespan(app: FastAPI):
     transcript.start()
     manager.start()
     try:
+        await prepare_tools()
         yield
     finally:
         manager.stop()
@@ -335,7 +372,7 @@ async def chat(request: Request) -> JSONResponse:
 
     async def call_tool(name: str, arguments) -> str:
         transcript.emit(session, "tool_call", name=name, arguments=arguments)
-        result = await toolbox.call(name, arguments)
+        result = await while_connected(request, toolbox.call(name, arguments))
         transcript.emit(session, "tool_result", name=name, text=result)
         return result
     # HTTP requests can contain conversation context. Preserve it once per
@@ -349,7 +386,7 @@ async def chat(request: Request) -> JSONResponse:
     data: dict = {}
     try:
         for _ in range(TOOL_ROUNDS + 1):
-            data = await _chat_once(messages, max_tokens, tools or None)
+            data = await while_connected(request, _chat_once(messages, max_tokens, tools or None))
             choices = data.get("choices") or []
             message = (choices[0].get("message") if choices else None) or {}
             content = message.get("content") or ""
@@ -405,6 +442,9 @@ async def chat(request: Request) -> JSONResponse:
                         "content": result,
                     }
                 )
+    except ChatDisconnected:
+        transcript.emit(session, "session_end", reason="cancelled")
+        return JSONResponse({"error": "request cancelled"}, status_code=499)
     except httpx.HTTPError as exc:
         transcript.emit(session, "error", error=str(exc))
         transcript.emit(session, "session_end", reason="error")
@@ -821,7 +861,7 @@ async def voice(ws: WebSocket) -> None:
         if not text:
             await sender.state("ready", "didn't catch that")
             return
-        await sender.json({"type": "final", "text": text})
+        await sender.json({"type": "final", "text": text, "turn_id": turn["id"]})
         await sender.state("thinking", "thinking")
         messages = [{"role": "system", "content": system_prompt()}, *history[-8:]]
         messages.append({"role": "user", "content": text})
@@ -881,7 +921,7 @@ async def voice(ws: WebSocket) -> None:
                     reply += delta
                     round_text += delta
                     buffer += delta
-                    await sender.json({"type": "assistant_delta", "text": delta})
+                    await sender.json({"type": "assistant_delta", "text": delta, "turn_id": turn["id"]})
                     sentences, buffer = take_sentences(buffer)
                     for sentence in sentences:
                         # While the user is speaking, stop synthesizing: it frees
@@ -976,7 +1016,7 @@ async def voice(ws: WebSocket) -> None:
                 # answer. Never end a user turn in silence.
                 reply = "No he podido completar la consulta."
                 buffer = reply
-                await sender.json({"type": "assistant_delta", "text": reply})
+                await sender.json({"type": "assistant_delta", "text": reply, "turn_id": turn["id"]})
             if not cancelled:
                 sentences, buffer = take_sentences(buffer, final=True)
                 for sentence in sentences:
@@ -991,10 +1031,13 @@ async def voice(ws: WebSocket) -> None:
             if cancelled:
                 played_ms = await wait_played(turn)
                 record(turn, played_ms)
+                await sender.json({"type": "assistant_text", "turn_id": turn["id"],
+                                   "text": (turn.get("assistant_msg") or {}).get("content", "")})
                 await sender.json({"type": "interrupted", "turn_id": turn["id"]})
                 debug("interrupted", turn=turn["id"], played_ms=round(played_ms))
             else:
                 record(turn)
+                await sender.json({"type": "assistant_text", "turn_id": turn["id"], "text": reply.strip()})
                 await sender.json({"type": "tts_end", "turn_id": turn["id"]})
                 if turn["audio_sent"]:
                     # Fallback if the client never reports playback_done (slow
@@ -1205,7 +1248,13 @@ async def voice(ws: WebSocket) -> None:
             if kind in {"arm", "disarm", "cancel", "stop"}:
                 log("control", action=kind)
 
-            if kind == "interrupt":
+            if kind == "context":
+                restored = voice_context(data.get("messages"))
+                if restored is not None and active["turn"] is None and not any(t["generating"] for t in turns.values()):
+                    history = restored
+                    for entry in history:
+                        log("message", role=entry["role"], text=entry["content"], source="restored_context")
+            elif kind == "interrupt":
                 try:
                     turn_id = int(data.get("turn_id", 0))
                     played_ms = float(data.get("played_ms", 0.0))
@@ -1227,6 +1276,8 @@ async def voice(ws: WebSocket) -> None:
                 if not turn["generating"]:
                     # Generation already finished; edit the recorded reply.
                     truncate(turn, played_ms)
+                    await sender.json({"type": "assistant_text", "turn_id": turn_id,
+                                       "text": (turn.get("assistant_msg") or {}).get("content", "")})
                     turns.pop(turn_id, None)
             elif kind == "playback_done":
                 try:

@@ -7,53 +7,28 @@ verifiable without depending on external sites or search-engine availability.
 
 import json
 import os
+from pathlib import Path
 import unittest
 from unittest.mock import AsyncMock, patch
-from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
 import app
-from browser_tool import BrowserSession
-from tools import tool_specs
+from mcp_browser import MCPConnection
+from tools import prepare_tools, tool_specs
 
 
 @unittest.skipUnless(os.environ.get("DOT_TEST_CORE") == "1", "requires live core model")
 class CoreConversations(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.actions = []
-        original_open = BrowserSession._open
-        actions = self.actions
-
-        async def open_fixture(session, host):
-            with patch("browser_tool.public_address", AsyncMock(return_value="8.8.8.8")):
-                await original_open(session, host)
-
-            async def fixture(route):
-                parsed = urlsplit(route.request.url)
-                if route.request.method != "GET":
-                    await route.fallback()
-                    return
-                actions.append(parsed.path + ("?" + parsed.query if parsed.query else ""))
-                if parsed.path == "/challenge":
-                    body = '<h1>Verifica que eres humano</h1><p>Checking your browser. No hay resultados disponibles.</p>'
-                elif parsed.path == "/search":
-                    query = parse_qs(parsed.query).get("q", [""])[0]
-                    body = f'<main><h1>Resultados</h1><p>Consulta recibida: {query}. Código de confirmación: NUBE-742. Esta página confirma que el formulario se ha enviado correctamente.</p></main>'
-                else:
-                    body = '''<main><h1>Biblioteca de prueba</h1>
-                    <p>La biblioteca abre los sábados a las 10:30. Este es el horario publicado para la prueba de navegación del asistente.</p>
-                    <form action="/search" method="get"><label for="q">Consulta</label>
-                    <input id="q" name="q"><button>Buscar</button></form></main>'''
-                await route.fulfill(status=200, content_type="text/html; charset=utf-8", body=body)
-
-            await session._page.route("https://fixture.example/**", fixture)
-
-        self.patches = [patch.object(BrowserSession, "_open", open_fixture),
-                        patch.object(app.manager, "snapshot", return_value={"state": "ready"}),
+        self.patches = [patch.object(MCPConnection, "server_script", Path(__file__).with_name("mcp_fixture.mjs")),
+                         patch("mcp_browser.public_address", AsyncMock(return_value="8.8.8.8")),
+                         patch.object(app.manager, "snapshot", return_value={"state": "ready"}),
                         patch.dict(os.environ, {"DOT_TOOLS": "1", "DOT_BROWSE": "1"})]
         for item in self.patches:
             item.start()
+        await prepare_tools()
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app.app), base_url="http://localhost")
 
     async def asyncTearDown(self):
@@ -86,9 +61,9 @@ class CoreConversations(unittest.IsolatedAsyncioTestCase):
         history = []
         await self.turn(history, "Quiero comprobar el horario de una biblioteca. Te paso la página en el siguiente mensaje.")
         answer, trace = await self.turn(history, "Abre https://fixture.example/library y dime a qué hora abre los sábados.")
-        self.assertTrue(any(t["name"] in {"navigate", "browse"} for t in trace))
+        self.assertTrue(any(t["name"] in {"navigate", "browse", "browser_navigate"} for t in trace))
         self.assertIn("10:30", answer)
-        self.assertIn("/library", self.actions)
+        self.assertTrue(any("/library" in t["result"] for t in trace))
 
     async def test_fill_and_submit_then_follow_up(self):
         history = []
@@ -96,7 +71,7 @@ class CoreConversations(unittest.IsolatedAsyncioTestCase):
         names = [t["name"] for t in trace]
         self.assertIn("browser_type", names)
         self.assertIn("browser_click", names)
-        self.assertIn("/search?q=Madrid", self.actions)
+        self.assertTrue(any("/search?q=Madrid" in t["result"] for t in trace))
         self.assertIn("NUBE-742", answer)
         answer, _ = await self.turn(history, "Repíteme solo el código que acabas de obtener.")
         self.assertIn("NUBE-742", answer)
@@ -143,6 +118,6 @@ class CoreConversations(unittest.IsolatedAsyncioTestCase):
         calls = [event for event in events if event["type"] == "tool_call"]
         speech = ''.join(event["text"] for event in events if event["type"] == "text")
         print(json.dumps({"voice_speech": speech, "calls": calls}, ensure_ascii=False), flush=True)
-        self.assertTrue(any(e["name"] in {"navigate", "browse"} for e in calls), events)
+        self.assertTrue(any(e["name"] in {"navigate", "browse", "browser_navigate"} for e in calls), events)
         self.assertNotIn("https://", speech)
         self.assertNotRegex(speech, r'(?:browse|navigate)\s*[({]')

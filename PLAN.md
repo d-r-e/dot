@@ -137,9 +137,15 @@ browser mic (AudioWorklet, 16 kHz mono)
       `browse`/`navigate`, `browser_click`, `browser_type`, `browser_snapshot`
       and `browser_close` (explicit user request only; cleanup is server-owned).
       Playwright AI accessibility trees supply the refs used by actions, matching
-      the Playwright MCP pattern. Headed/minimized Chromium, headless fallback;
+      the Playwright MCP pattern. Strictly headless full Chromium with a
+      version-consistent Chrome UA and the automation flag disabled;
       public pages only. See `BROWSING.md`.
 - [x] Same tool loop for `POST /api/chat`, with a `dot_tools` trace.
+- [x] Migrated runtime browser actions to official Playwright MCP with a private
+      per-conversation stdio policy gateway. Full 72-tool catalog tested; default
+      exposure is eight safe browser tools. Added a local Madrid clock tool;
+      weather stays on fixed Open-Meteo endpoints. Live clock/weather/BTC results
+      are recorded in `docs/mcp-trial.md`.
 - [ ] Local code execution (`run_code`) — deliberately deferred until it can be
       sandboxed; a fetched page must never be able to run code.
 

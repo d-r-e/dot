@@ -125,26 +125,23 @@ class BrowserSession:
         self._leased = True
         try:
             self._playwright = await async_playwright().start()
-            # DataDome-backed sites (elpais.com and others) answer 403 to
-            # headless Chromium no matter which UA or JS setting we use. A
-            # headed browser gets the normal page; its window is minimized
-            # immediately so it never sits on the desktop.
-            headed = True
+            # Match the MCP backend: full Chromium, strictly headless, native
+            # version/platform UA with only the HeadlessChrome token removed.
+            self._browser = await self._playwright.chromium.launch(
+                channel="chromium", headless=True, chromium_sandbox=True,
+                args=[f"--host-resolver-rules=MAP * {pinned}", "--no-proxy-server", "--disable-quic",
+                      "--disable-blink-features=AutomationControlled"],
+            )
+            cdp = await self._browser.new_browser_cdp_session()
             try:
-                self._browser = await self._playwright.chromium.launch(
-                    headless=False, chromium_sandbox=True,
-                    args=[f"--host-resolver-rules=MAP * {pinned}", "--no-proxy-server", "--disable-quic"],
-                )
-            except Exception:
-                # No GUI session (ssh, CI): keep the tool working headless.
-                headed = False
-                self._browser = await self._playwright.chromium.launch(
-                    headless=True, chromium_sandbox=True,
-                    args=[f"--host-resolver-rules=MAP * {pinned}", "--no-proxy-server", "--disable-quic"],
-                )
+                version = await cdp.send("Browser.getVersion")
+                user_agent = version["userAgent"].replace("HeadlessChrome/", "Chrome/")
+            finally:
+                await cdp.detach()
             self._host = host
             self._context = await self._browser.new_context(
                 locale="es-ES", timezone_id="Europe/Madrid",
+                user_agent=user_agent,
                 viewport={"width": 1440, "height": 900},
                 accept_downloads=False, service_workers="block",
             )
@@ -156,15 +153,6 @@ class BrowserSession:
                 }
             """)
             self._page = await self._context.new_page()
-            if headed:
-                with contextlib.suppress(Exception):
-                    cdp = await self._context.new_cdp_session(self._page)
-                    window = await cdp.send("Browser.getWindowForTarget")
-                    await cdp.send(
-                        "Browser.setWindowBounds",
-                        {"windowId": window["windowId"], "bounds": {"windowState": "minimized"}},
-                    )
-                    await cdp.detach()
             self._page.on("download", lambda download: asyncio.create_task(download.cancel()))
             self._context.on("page", lambda popup: asyncio.create_task(popup.close()))
         except BaseException:

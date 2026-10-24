@@ -54,7 +54,7 @@ ensure_venv() {
     uv pip install --python "$VENV/bin/python" -r requirements.txt
     touch "$VENV/.deps-ok"
   fi
-  # Upgrade existing headless-only environments as well as new installations.
+  # Modern headless needs full Chromium; upgrade existing shell-only environments.
   # Reinstall after dependency updates so Chromium matches the pinned Playwright.
   if [ ! -f "$VENV/.chromium-full-ok" ] || [ "$VENV/.deps-ok" -nt "$VENV/.chromium-full-ok" ]; then
     "$VENV/bin/python" -m playwright install chromium
@@ -75,6 +75,17 @@ case "${1:-}" in
 esac
 
 ensure_venv
+
+if [ "${DOT_TOOLS:-1}" != "0" ] && [ "${DOT_BROWSE:-${DOT_SEARCH:-1}}" != "0" ]; then
+  command -v npm >/dev/null 2>&1 || {
+    echo "error: Node.js 18+ and npm are required for Playwright MCP" >&2
+    exit 1
+  }
+  if [ ! -f node_modules/.dot-mcp-ok ] || [ package-lock.json -nt node_modules/.dot-mcp-ok ]; then
+    npm ci --ignore-scripts
+    touch node_modules/.dot-mcp-ok
+  fi
+fi
 
 if [ ! -f "$MODEL" ]; then
   if [ "$MODEL" = "models/Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf" ]; then

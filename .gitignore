@@ -10,3 +10,4 @@ __pycache__/
 .env
 .chat
 .tls/
+node_modules/

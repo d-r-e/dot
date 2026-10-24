@@ -15,6 +15,7 @@ class BrowsingHostTests(unittest.TestCase):
         for url, host in cases.items():
             with self.subTest(url=url):
                 self.assertEqual(browsing_host("navigate", {"url": url}), host)
+                self.assertEqual(browsing_host("browser_navigate", {"url": url}), host)
                 self.assertEqual(browsing_host("browse", '{"url": "%s"}' % url), host)
 
     def test_only_navigation_tools(self):

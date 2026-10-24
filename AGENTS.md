@@ -54,12 +54,13 @@ Useful env vars:
 | `VOICE_WARMUP` | `1` | warm Kokoro at load |
 | `VOICE_DEBUG` | off | log turn, barge and truncation decisions |
 | `DOT_THINKING` | `1` | model reasoning (`enable_thinking`); never spoken |
-| `DOT_TOOLS` | `1` | automatic emotion, weather and browser tools |
+| `DOT_TOOLS` | `1` | automatic emotion, clock, weather and MCP browser tools |
 | `DOT_BROWSE` | `1` | enable the browser tools |
 | `DOT_BROWSE_TIMEOUT` | `20` | seconds per browser action |
 | `DOT_WEATHER_TIMEOUT` | `8` | seconds per weather lookup |
 | `DOT_TOOL_ROUNDS` | `6` | tool rounds allowed per turn |
 | `DOT_MAX_TOKENS` | `1024` | max completion tokens (reasoning + answer) |
+| `DOT_MCP_ALL_TOOLS` | off | full MCP catalog experiment; execution policy is unchanged |
 
 ## Invariants
 
@@ -84,9 +85,11 @@ Useful env vars:
   cert in `.tls/` (SANs: localhost, `*.local`, current LAN IPs) and serves HTTPS.
 - **Tools:** model-driven and optional (`DOT_TOOLS=0` disables all). `emotion` only
   changes the dot; it must never alter the voice state machine. Network access is
-  through `browser_tool.BrowserSession`: `browse`/`navigate`, `browser_click`,
-  `browser_type`, `browser_snapshot`, `browser_close`. Use Playwright's AI-mode
-  accessibility tree and `get_by_ref()`, not CSS inventories. Public HTTP(S),
+  through `mcp_browser.MCPBrowserSession` and the private stdio gateway
+  `mcp_browser.mjs`, using the pinned official Playwright MCP. `browse`/`navigate`
+  remain aliases for native `browser_navigate`. Use MCP snapshots and native
+  `target` ARIA refs, never model-provided selectors. The gateway uses Playwright's
+  built-in ARIA-ref engine to check protected controls. Public HTTP(S),
   validated/pinned DNS, same-host GET/HEAD only; no local files, LAN, passwords,
   uploads or downloads. Browser state is per conversation and persists across turns
   while armed, so follow-up questions about a page read do not need a new URL.
@@ -97,6 +100,14 @@ Useful env vars:
   (geocoding + forecast), no model-supplied URL, no API key. Keep it that way;
   do not turn it into a general fetch. Search engines block headless clients, so
   the prompt sends weather questions to `weather` instead of `browse`.
+  `current_time()` reads the local clock in Europe/Madrid with no network access.
+  Discovering all 72 MCP tools does not authorize execution: JavaScript, code,
+  uploads/downloads, cookie/storage access, page-defined WebMCP and arbitrary
+  selectors remain blocked. Default discovery exposes eight approved browser
+  tools; `DOT_MCP_ALL_TOOLS=1` exposes blocked schemas for experiments, not permissions.
+  Each conversation owns its MCP process on a dedicated async owner task so SDK
+  contexts enter/exit in the same task. Cancellation closes that session; never
+  share its browser with another user or attach to a personal profile.
 - **Tool syntax:** this model writes bare `emotion{...}` / `navigate{...}` instead
   of llama.cpp's `<|tool_call>` wrapper. `tools.InlineToolParser` turns those into
   real calls and must keep them out of the spoken reply. Positional, named and bare
@@ -145,11 +156,16 @@ For voice replies the request must use:
 the spoken reply. It only drives the transient `pensando` hint and an
 `assistant_reasoning` entry in `.chat`.
 
-The browser runs **headed Chromium with its window minimized** via CDP: some sites
-(DataDome-backed, e.g. `elpais.com`) returned 403 to the headless variants tested.
-If headed launch fails it falls back to headless. Minimization is best-effort;
-a brief window flash or Dock icon is possible. `run.sh` installs full Chromium,
-including when upgrading an existing headless-only venv. Full details in `BROWSING.md`.
+The browser is **strictly headless full Chromium**, never `chrome-headless-shell`,
+never a visible/minimized fallback. Launch with the sandbox enabled and
+`--disable-blink-features=AutomationControlled`. Derive the UA from the running
+browser's `Browser.getVersion` and replace only `HeadlessChrome/` with `Chrome/`;
+never hardcode a version/platform or attach to a personal profile. Keep locale
+`es-ES`, timezone `Europe/Madrid` and viewport `1440×900`. These tested settings
+read El País's homepage; hiding `webdriver` alone did not. They do not guarantee
+access or solve captchas. A block stays a model-visible error. `run.sh` installs
+full Chromium, upgrading shell-only venvs. See `docs/headless-evaluation.md` and
+`BROWSING.md`. Both MCP and the legacy regression wrapper use this profile.
 
 The companion `nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB-DFlash` is a 360M-parameter
 BF16 draft (0.74 GB), not a standalone assistant. `./run.sh --fetch` downloads it;
@@ -191,11 +207,12 @@ History entries are shared dicts, so late truncation mutates the recorded messag
 ## Voice protocol
 
 Client → server JSON: `arm`, `disarm`, `cancel`, `stop`,
+`context {messages}` (idle only; bounded user/assistant turns),
 `interrupt {turn_id, played_ms}`, `playback_done {turn_id}`; binary frames are
 16 kHz int16 PCM.
 
 Server → client JSON: `state`, `sample_rate`, `speech_started`, `partial`,
-`final`, `assistant_delta`, `tts_begin`, `tts_end`, `pause_playback`,
+`final`, `assistant_delta`, `assistant_text {turn_id, text}`, `tts_begin`, `tts_end`, `pause_playback`,
 `resume`, `barge_in`, `interrupted`, `cancel_playback`, `browsing`, `reasoning`, `emotion`, `error`;
 binary frames are 24 kHz int16 PCM.
 
@@ -233,8 +250,18 @@ wait for `ready` (no animation). Arming is remembered in
 
 - Python: 4 spaces, type hints where useful. FastAPI/httpx for the web layer;
   numpy/mlx only inside the voice engine. No frameworks in `static/`; plain HTML/CSS/JS.
-- Keep the dot UI visually minimal — no text, no chrome. The one exception is the
-  transient `browsing` pill: hostname only, no verbs or status copy, while a
-  browser tool navigates. Use `aria-live` for status.
+- Keep the dot UI visually minimal. Typing/focusing `Escribe…` opens a split view:
+  dot on the left, page-lifetime conversation on the right (stacked on mobile).
+  No transcript panels, borders or backgrounds; only violet user text and pale
+  assistant text. Enter sends, Shift+Enter adds a line, Escape with an empty draft
+  collapses without clearing history. Typed requests use `/api/chat`, never need
+  mic permission and close the mic when switching away from voice.
+  The transient hint remains hostname-only or `pensando`. Use `aria-live` for status.
+  `static/chat.js` keeps the full visible transcript in memory, never localStorage;
+  model context is bounded and excludes failed/unconfirmed partial replies. Render
+  all text with `textContent`, never markdown/HTML. Voice `assistant_text` events
+  reconcile completion/interruption (sentence-level playback estimate, not proof
+  of exact words heard). The client can restore bounded user/assistant context
+  via `context` before arming an idle voice socket; never accept system/tool roles.
 - `llama-server` logs go to `logs/llama.log`. Uvicorn access/error logs go to stdout
   when launched by `run.sh`.

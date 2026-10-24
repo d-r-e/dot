@@ -32,7 +32,7 @@ class URLTests(unittest.TestCase):
     def test_schemas_and_inline_recovery(self):
         with patch.dict("os.environ", {"DOT_TOOLS": "1", "DOT_BROWSE": "1"}):
             names = [spec["function"]["name"] for spec in tool_specs()]
-        self.assertEqual(set(names), {"emotion", "weather", "browse", "navigate",
+        self.assertEqual(set(names), {"emotion", "weather", "current_time", "browse", "navigate",
                                       "browser_click", "browser_type",
                                       "browser_snapshot", "browser_close"})
         for name, arguments in [("navigate", {"url": "https://example.com/"}),
@@ -135,6 +135,14 @@ class AccessibilityBrowserTests(unittest.IsolatedAsyncioTestCase):
         return match.group(1)
 
     async def test_aria_tree_type_click_and_close(self):
+        profile = await self.session._page.evaluate("""() => ({
+            ua: navigator.userAgent, webdriver: navigator.webdriver,
+            language: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+        })""")
+        self.assertNotIn('HeadlessChrome', profile['ua'])
+        self.assertFalse(profile['webdriver'])
+        self.assertEqual(profile['language'], 'es-ES')
+        self.assertEqual(profile['timezone'], 'Europe/Madrid')
         view = await self.session.navigate("https://fixture.example/start")
         self.assertIn('heading "Prueba del árbol de accesibilidad"', view)
         self.assertNotIn("Oculto", view)

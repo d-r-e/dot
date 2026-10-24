@@ -63,7 +63,8 @@ class ChatLogTests(unittest.TestCase):
         self.assertEqual(len(self.records()), 2)
 
     def test_http_conversation(self):
-        request = SimpleNamespace(headers={}, json=AsyncMock(return_value={"prompt": "Hola"}))
+        request = SimpleNamespace(headers={}, json=AsyncMock(return_value={"prompt": "Hola"}),
+                                  is_disconnected=AsyncMock(return_value=False))
         answer = {"choices": [{"message": {"role": "assistant", "content": "Hola, ¿cómo estás?"}}]}
         with patch.object(app, "transcript", self.log), \
              patch.object(app.manager, "snapshot", return_value={"state": "ready"}), \

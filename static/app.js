@@ -1,11 +1,12 @@
 // Dot UI: SSE for llama health, WebSocket for the voice loop.
-// The visible surface is only the dot; everything else is aria-live text.
+// Typing reveals a plain-text conversation beside the dot.
 //
 // Voice is hands-free once armed: the mic stays open (including while the
 // agent speaks), Silero decides when speech starts, and the server drives
 // turn-taking. A click only arms, mutes, or cancels.
 
 import { createPresence } from "./presence.js";
+import { createTextChat } from "./chat.js?v=1";
 
 const dot = document.getElementById("dot");
 const statusEl = document.getElementById("status");
@@ -29,6 +30,7 @@ let voiceState = null;
 let voiceDetail = "";
 let voiceReady = false;
 let armed = false;
+let armGeneration = 0;
 
 let ws = null;
 let wsOpen = null;
@@ -46,10 +48,22 @@ let playTimer = null;
 let booted = false;
 let browsingHost = "";
 let reasoningActive = false;
+let textThinking = false;
+
+const textChat = createTextChat({
+  onActivate() {
+    // One input channel at a time; typing never requests microphone permission.
+    if (voiceState === "thinking" || voiceState === "speaking") textChat.interruptVoice();
+    if (armed || voiceState) disarm();
+    if (voiceState === "error") setVoiceState(null, "");
+  },
+  onBusy(value) { textThinking = value; render(); },
+  onEmotion: flashEmotion,
+});
 
 function render() {
   const raw = llamaState === "error" ? "error" :
-    voiceState && VOICE_STATES.has(voiceState) ? voiceState : llamaState;
+    textThinking ? "thinking" : voiceState && VOICE_STATES.has(voiceState) ? voiceState : llamaState;
   const state = raw === "stopped" ? "starting" : raw;
   dot.dataset.state = state;
   dot.dataset.armed = String(armed);
@@ -93,7 +107,7 @@ function flashEmotion(name) {
 // One line under the dot: a hostname while a page opens, "pensando" while
 // the model reasons. Never two at once; the hostname wins.
 function renderHint() {
-  const thinking = reasoningActive || voiceState === "thinking";
+  const thinking = textThinking || reasoningActive || voiceState === "thinking";
   const text = browsingHost || (thinking ? "pensando" : "");
   if (!text) {
     hintEl.classList.remove("is-on");
@@ -419,6 +433,7 @@ function connectVoice() {
   voiceReady = false;
   const scheme = location.protocol === "https:" ? "wss" : "ws";
   const socket = new WebSocket(`${scheme}://${location.host}/ws/voice`);
+  textChat.beginVoiceSession();
   ws = socket;
   socket.binaryType = "arraybuffer";
 
@@ -469,6 +484,7 @@ function connectVoice() {
     } catch {
       return;
     }
+    textChat.voiceMessage(message);
     switch (message.type) {
       case "state": {
         const state = message.state;
@@ -597,17 +613,22 @@ function cancelPlayback() {
 
 // ------------------------------------------------------------------ arm / mute
 async function arm() {
-  if (armed) return;
+  if (armed || textChat.busy) return;
+  const generation = ++armGeneration;
   setVoiceState("loading_voice", "opening microphone");
   try {
     await ensureAudio();
+    if (generation !== armGeneration) { closeAudio(); return; }
   } catch (error) {
+    if (generation !== armGeneration) return;
     setVoiceState("error", `microphone: ${error.message}`);
     return;
   }
   try {
     await connectVoice();
+    if (generation !== armGeneration) { closeAudio(); return; }
   } catch (error) {
+    if (generation !== armGeneration) return;
     setVoiceState("error", `voice: ${error.message}`);
     return;
   }
@@ -618,6 +639,7 @@ async function arm() {
     /* private mode */
   }
   if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "context", messages: textChat.context() }));
     ws.send(JSON.stringify({ type: "arm" }));
   }
   setVoiceState(null, "");
@@ -625,6 +647,7 @@ async function arm() {
 }
 
 function disarm() {
+  armGeneration += 1;
   const wasArmed = armed;
   armed = false;
   voiceReady = false;
@@ -689,6 +712,10 @@ function unlock() {
 
 // ----------------------------------------------------------------------- click
 dot.addEventListener("click", async () => {
+  if (textChat.busy) {
+    textChat.cancel();
+    return;
+  }
   if (llamaState === "error") {
     await restartLlama();
     return;

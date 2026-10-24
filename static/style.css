@@ -46,8 +46,115 @@ body {
 
 main {
   position: relative;
+  width: 100%;
+  height: 100dvh;
+}
+
+.dot-stage {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 100%;
   display: grid;
   place-items: center;
+  transition: width 600ms var(--ease-settle);
+}
+
+/* Text only: no divider, cards, bubbles, borders or panel background. */
+:root {
+  --text-user: #b9a6f5;
+  --text-assistant: #e1e1eb;
+}
+
+body.is-typing .dot-stage { width: 42%; }
+
+.conversation {
+  position: absolute;
+  left: 50%;
+  bottom: max(7vh, env(safe-area-inset-bottom));
+  width: min(440px, calc(100% - 48px));
+  transform: translateX(-50%);
+}
+
+body.is-typing .conversation {
+  inset: 10vh 7% max(7vh, env(safe-area-inset-bottom)) 46%;
+  width: auto;
+  transform: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.messages {
+  display: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-user) transparent;
+  min-height: 0;
+  flex: 1;
+  padding-right: 12px;
+  outline: none;
+}
+
+body.is-typing .messages { display: block; }
+
+.message {
+  margin: 0 0 28px;
+  color: var(--text-assistant);
+  font-size: clamp(16px, 1.3vw, 19px);
+  line-height: 1.75;
+  letter-spacing: 0.005em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message[data-role="user"] { color: var(--text-user); }
+
+.compose { margin: 0; }
+body.is-typing .compose { margin-top: 32px; }
+
+.compose textarea {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-user);
+  caret-color: var(--text-user);
+  font: inherit;
+  font-size: 17px;
+  line-height: 1.75;
+  resize: none;
+  max-height: 160px;
+  text-align: center;
+}
+
+.compose textarea::placeholder { color: var(--text-user); opacity: 0.65; }
+body.is-typing .compose textarea { text-align: left; }
+.compose:focus-within textarea::placeholder { opacity: 1; }
+.messages:focus-visible .message:last-child {
+  text-decoration: underline;
+  text-underline-offset: 0.25em;
+}
+
+@media (max-width: 700px) {
+  body.is-typing .dot-stage {
+    width: 100%;
+    height: min(24dvh, 180px);
+  }
+  body.is-typing .dot { scale: 0.7; }
+  body.is-typing .hint { top: calc(50% + 54px); }
+  body.is-typing .conversation {
+    inset: min(27dvh, 200px) 24px max(24px, env(safe-area-inset-bottom));
+  }
+  .message { margin-bottom: 22px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot-stage { transition: none; }
 }
 
 /* One transient line under the dot: the hostname while a page is opening,

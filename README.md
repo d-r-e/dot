@@ -45,9 +45,28 @@ Local inference, Spanish voice by default, and almost nothing on screen:
 Full-size captures: [ready](docs/dot-ready.png) · [thinking](docs/dot-thinking.png) ·
 [browsing](docs/dot-browsing.png) · [speaking](docs/dot-speaking.png).
 
+### Type, too
+
+Start typing anywhere, or focus **Escribe…**. The dot moves left and the conversation
+appears on the right: violet for you, pale text for the assistant. No borders,
+panels, bubbles or added background. On phones the dot sits above the conversation.
+
+**Enter** sends · **Shift+Enter** adds a line · **Escape** with an empty draft returns
+to the centered dot without clearing the conversation. Click the dot while a typed
+reply is pending to cancel it. The input stays available for your next draft.
+
+Typing uses `/api/chat` and needs no microphone permission. Switching from voice
+closes the mic; accepted voice turns also appear in the transcript. The full visible
+history lives only in the current page (reload clears it); model context is bounded.
+Reasoning/tool internals never appear. Interrupted voice text is reconciled with
+the server's sentence-level history estimate, not a word-exact playback record.
+
+![Typing mode: dot left, conversation right, two text colors](docs/dot-typing.png)
+
 ## Quick start
 
-**Requirements:** Apple Silicon macOS (MLX voice), `uv`, Python 3.12, the Hugging
+**Requirements:** Apple Silicon macOS (MLX voice), `uv`, Python 3.12, Node.js 18+
+with npm (Playwright MCP), the Hugging
 Face `hf` CLI for downloads, and a recent Metal-enabled `llama-server` supporting
 Gemma 4 and `--jinja`. Build instructions are [below](#llamacpp). This project was
 tested on an M5 with 24 GB unified memory; download sizes are not RAM requirements.
@@ -180,12 +199,15 @@ The assistant can express emotion and operate an isolated browser:
 
 | Tool | What it does |
 |---|---|
-| `browse(url)` / `navigate(url)` | Opens a public page and returns an accessibility tree with ARIA refs |
-| `browser_click(ref)` | Clicks an element by its exact reference from the current accessibility tree |
-| `browser_type(ref, text)` | Fills a field without submitting; returns the updated accessibility tree |
+| `browser_navigate(url)` | Opens a public page through Playwright MCP and returns an accessibility tree |
+| `browse(url)` / `navigate(url)` | Compatibility aliases for `browser_navigate` |
+| `browser_click(target)` | Clicks an exact ARIA ref from the current tree (not a selector) |
+| `browser_type(target, text)` | Fills a field without submitting; returns the updated tree |
+| `browser_navigate_back()` / `browser_hover(target)` / `browser_wait_for(...)` | Native MCP navigation, hover and bounded waiting |
 | `browser_snapshot()` | Returns the current view again with fresh refs |
 | `browser_close()` | Closes the browser; only on an explicit user request |
 | `weather(place)` | Current weather and a three-day forecast from Open-Meteo |
+| `current_time()` | Date/time from the local clock, explicitly in Europe/Madrid |
 | `emotion` | Briefly changes the dot's expression: `smile`, `sad`, `surprise`, `ask`, `angry`, `laugh` |
 
 Tools are on by default. `DOT_TOOLS=0` disables all tools; `DOT_BROWSE=0` disables
@@ -218,21 +240,41 @@ captcha/empty-page/HTTP failures must not be treated as verified facts. See
 
 ## Browsing
 
-`BrowserSession` in `browser_tool.py` wraps an isolated browser per conversation with:
+`MCPBrowserSession` in `mcp_browser.py` connects to the official Playwright MCP
+through a private stdio gateway (`mcp_browser.mjs`). Each conversation owns its
+process and browser. This replaces the runtime's custom page-action implementation;
+the older direct wrapper remains as a regression reference.
 
-- Playwright's `aria_snapshot(mode="ai")` and `get_by_ref()`, like Playwright MCP — not a
-  hand-built CSS inventory;
+The gateway preserves dot's network and execution policy:
+
+- native MCP discovery, navigation/actions and accessibility snapshots; only ARIA
+  refs actually returned in the last view can be used, not arbitrary selectors;
 - public HTTP(S) only, validated DNS pinned to a single public IP, same-host GET/HEAD
   only, no local addresses, no credentials, no downloads/uploads;
-- a snapshot bounded to 8,000 characters at accessibility depth 12;
+- snapshots bounded to about 8,000 characters (automatic snapshots use depth 12);
 - a 20-second budget per action (excluding cleanup/error reporting);
 - at most two concurrent browser sessions.
 
-The browser is **headed Chromium with its window minimized** (via CDP). Some sites,
-including `elpais.com` (DataDome), returned 403 to the headless variants tested while
-headed Chromium received the normal page. Access is not guaranteed. If headed
-launch fails, the tool falls back to headless. Minimization is best-effort: a brief
-window flash or Dock icon is possible. Details in [BROWSING.md](BROWSING.md).
+The browser is **strictly headless full Chromium**: no windows, minimization or
+headed fallback. The UA comes from the installed browser, with only the
+`HeadlessChrome` token normalized to `Chrome`; launch uses
+`--disable-blink-features=AutomationControlled`. Locale/timezone/viewport remain `es-ES`, `Europe/Madrid`,
+`1440×900`, with the sandbox and network policy intact. No stealth extensions,
+personal profiles or hardcoded browser versions. The
+[headless evaluation](docs/headless-evaluation.md) read El País's homepage with
+this setup; it does not guarantee access or solve verification challenges.
+Details in [BROWSING.md](BROWSING.md).
+
+By default, eight approved browser tools are exposed. `DOT_MCP_ALL_TOOLS=1`
+exposes the complete 72-tool native catalog, including blocked tools clearly marked
+as disabled. **It never enables code execution, uploads, downloads, arbitrary
+selectors, cookie/storage manipulation or private networking.** Both the Python
+adapter and MCP gateway reject disallowed calls. See the
+[live trial](docs/mcp-trial.md) for clock, Torremolinos weather and BTC checks.
+
+llama.cpp also supports MCP itself, but configuring its web UI does not configure
+dot. Keeping the MCP client in dot preserves per-conversation lifecycle and voice
+cancellation; the existing LLM/tool loop remains responsible for orchestration.
 
 ## HTTP + WS
 
@@ -299,6 +341,7 @@ boundaries, barge-in, reasoning, browsing and emotion events; binary messages ca
 | `DOT_TOOL_ROUNDS` | `6` | tool rounds allowed per turn |
 | `DOT_MAX_TOKENS` | `1024` | completion tokens for reasoning + answer |
 | `DOT_THINKING` | `1` | reasoning on (`enable_thinking`); never spoken |
+| `DOT_MCP_ALL_TOOLS` | off | full MCP schema experiment; execution policy is unchanged |
 | `VOICE_WARMUP` | `1` | warm Kokoro at load; set `0` to skip |
 | `VOICE_DEBUG` | off | log turn, barge and truncation decisions |
 
@@ -384,6 +427,10 @@ is logged again for that request. No raw audio is stored, and the transcript fil
 is not exposed by an HTTP endpoint. Model context and tool arguments can still
 include conversation-derived text.
 
+Playwright MCP can also write snapshot artifacts under Git-ignored
+`.playwright-mcp/`. These contain page text and may include queries typed into
+pages; treat them as private and remove/archive them while the app is stopped.
+
 Generated text and synthesized audio do **not** prove playback. Interrupted text is
 only a sentence-level estimate; cancellation may have no playback position. Writes
 use a dedicated background thread and drain on clean shutdown. There is no retention
@@ -416,15 +463,16 @@ this a safe public service.
 - **Voice says "voice unavailable"** — the MLX models are still downloading, or
   the venv was built with Python ≥3.13 (`misaki` needs <3.13).
 - **No mic** — the browser only exposes `getUserMedia` on `localhost` or HTTPS.
-- **Browser says a page requires verification** — some sites (DataDome-backed, such as
-  `elpais.com`) answer 403 to headless Chromium; the browser runs headed with a
-  minimized window instead. See [BROWSING.md](BROWSING.md).
+- **Browser says a page requires verification** — even the configured headless
+  profile may encounter 403/captchas. Report the block or try another public source;
+  no visible-browser fallback or challenge solving is enabled. See [BROWSING.md](BROWSING.md).
 
 ## Tests
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
 node --check static/app.js
+node --check mcp_browser.mjs
 bash -n run.sh
 ```
 
@@ -433,4 +481,11 @@ required). Live engine conversations are opt-in:
 
 ```bash
 DOT_TEST_CORE=1 .venv/bin/python -m unittest discover -s tests -p 'test_core_conversations.py' -v
+```
+
+The three full-catalog checks (local time, Torremolinos tomorrow, BTC/USD) use the
+real model and public network and are separately opt-in:
+
+```bash
+DOT_TEST_MCP_LIVE=1 .venv/bin/python -m unittest discover -s tests -p 'test_mcp_live_tasks.py' -v
 ```
