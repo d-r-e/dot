@@ -70,18 +70,20 @@ fixed hosts is the place name.
   Chrome profile. Same-host actions preserve page state and temporary cookies.
   Switching host with `navigate` creates a fresh browser/context.
 - The browser is **headed Chromium with its window minimized** through CDP. Some
-  sites, including `elpais.com` (DataDome), return 403 to every headless Chromium
-  variant; a headed browser gets the normal page. If no GUI session exists (ssh,
-  CI), the tool falls back to headless and those sites stay blocked.
+  sites, including `elpais.com` (DataDome), returned 403 to the headless variants
+  tested, while headed Chromium received the normal page. This is an observation,
+  not an access guarantee. Minimization is best-effort: a window flash or Dock
+  icon may remain. If headed launch fails (for example without a GUI session),
+  the tool falls back to headless and those sites may stay blocked.
 - HTTP requests close their browser after the tool loop. Voice connections retain
   it across turns so the model can keep reading; the server closes it on
   cancellation, disconnect or conversation end. `browser_close` exists for an
   explicit user request, not for the model to tidy up after every answer.
   At most two browser sessions are live simultaneously.
 - The model only sees the accessibility tree returned by the last tool call.
-  `browser_snapshot` re-reads the current page with fresh refs at the start of a
-  new voice turn, so follow-ups do not have to reopen the URL or ask the user for
-  references.
+  The model can call `browser_snapshot` to re-read the current page with fresh refs
+  in a new voice turn, so follow-ups do not have to reopen the URL or ask the user
+  for references.
 - URLs require HTTP(S), standard ports and no credentials. DNS answers must all
   be public, non-reserved addresses. Chromium DNS is pinned to a validated IP;
   ambient proxy settings are disabled. Numeric/local-address tricks, mixed
@@ -113,9 +115,9 @@ No raw audio, user-browser cookies or profiles are used by this wrapper.
 
 ## Setup and tests
 
-`run.sh` installs the pinned Python dependency and the full Chromium build when
-bootstrapping/updating dependencies (the headed browser needs it). To install the
-browser explicitly:
+`run.sh` installs the pinned Python dependency and the full Chromium build (the
+headed browser needs it). A separate marker upgrades existing headless-only
+environments; dependency updates also refresh the browser. To install it explicitly:
 
 ```bash
 .venv/bin/python -m playwright install chromium

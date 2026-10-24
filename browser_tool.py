@@ -1,4 +1,4 @@
-"""Isolated headless browsing for public pages; no model-supplied JavaScript."""
+"""Isolated public-page browsing; no model-supplied JavaScript."""
 
 from __future__ import annotations
 

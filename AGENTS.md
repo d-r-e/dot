@@ -54,13 +54,12 @@ Useful env vars:
 | `VOICE_WARMUP` | `1` | warm Kokoro at load |
 | `VOICE_DEBUG` | off | log turn, barge and truncation decisions |
 | `DOT_THINKING` | `1` | model reasoning (`enable_thinking`); never spoken |
-| `DOT_TOOLS` | `1` | automatic emotion and headless browser tools |
+| `DOT_TOOLS` | `1` | automatic emotion, weather and browser tools |
 | `DOT_BROWSE` | `1` | enable the browser tools |
 | `DOT_BROWSE_TIMEOUT` | `20` | seconds per browser action |
 | `DOT_WEATHER_TIMEOUT` | `8` | seconds per weather lookup |
 | `DOT_TOOL_ROUNDS` | `6` | tool rounds allowed per turn |
 | `DOT_MAX_TOKENS` | `1024` | max completion tokens (reasoning + answer) |
-| `DOT_THINKING` | `1` | model reasoning (`enable_thinking`); never spoken |
 
 ## Invariants
 
@@ -147,9 +146,15 @@ the spoken reply. It only drives the transient `pensando` hint and an
 `assistant_reasoning` entry in `.chat`.
 
 The browser runs **headed Chromium with its window minimized** via CDP: some sites
-(DataDome-backed, e.g. `elpais.com`) return 403 to every headless Chromium variant.
-Without a GUI session it falls back to headless. The window is minimized at
-creation, so it never appears on the desktop. Full details in `BROWSING.md`.
+(DataDome-backed, e.g. `elpais.com`) returned 403 to the headless variants tested.
+If headed launch fails it falls back to headless. Minimization is best-effort;
+a brief window flash or Dock icon is possible. `run.sh` installs full Chromium,
+including when upgrading an existing headless-only venv. Full details in `BROWSING.md`.
+
+The companion `nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB-DFlash` is a 360M-parameter
+BF16 draft (0.74 GB), not a standalone assistant. `./run.sh --fetch` downloads it;
+`DFLASH=1` loads it alongside the target, with `DRAFTER` overriding its path.
+Keep it opt-in: NVIDIA's GPU results do not establish a speedup on Metal.
 
 ## Voice stack
 

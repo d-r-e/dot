@@ -79,8 +79,7 @@ fail after 180 s, on child exit, missing binary/model, or a foreign listener on 
 
 ## Phase 2 — voice scaffold (Balanced MLX)
 
-- [x] VAD + streaming ASR + Kokoro TTS running on a worker thread via
-      `asyncio.to_thread`.
+- [x] VAD/ASR and Kokoro TTS running on separate pinned single-worker executors.
 - [x] Browser AudioWorklet mic (mono, resampled to 16 kHz) over `/ws/voice`.
 - [x] Streaming LLM → sentence chunker → TTS → 24 kHz PCM playback.
 - [x] Manual barge-in: click the dot while thinking/speaking to cancel.
@@ -100,7 +99,7 @@ All speech models run locally with `mlx-audio` 0.6.1 on Python 3.12.
 | VAD | `mlx-community/silero-vad` | ~2 MB | onset detection |
 | Smart Turn | `mlx-community/smart-turn-v3` | ~0.1 GB | semantic end-of-turn, ~5 ms |
 | STT | `mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit` | 0.76 GB | 40 locales, streaming, 160 ms look-ahead |
-| LLM | Nemotron-3.5-Bolt Q4_K_M | 6.18 GB | `enable_thinking: false`, `conversational_mode: true` |
+| LLM | Nemotron-3.5-Bolt Q4_K_M | 6.18 GB | `enable_thinking: true`, `conversational_mode: true`; reasoning never spoken |
 | TTS | `mlx-community/Kokoro-82M-8bit` | 0.35 GB | 54 voices, 24 kHz |
 
 Audio path:
@@ -125,19 +124,21 @@ browser mic (AudioWorklet, 16 kHz mono)
 
 ## Phase 3 — automatic tools
 
-- [x] `tools.py`: `emotion(name)` and headless browser tool definitions, executed
+- [x] `tools.py`: `emotion(name)`, weather and isolated browser tool definitions, executed
       by the model without a user click.
-- [x] Streaming tool loop in `/ws/voice`: a search preamble is spoken, the search
-      runs, and the answer streams afterwards; a barge cancels the tool.
+- [x] Streaming tool loop in `/ws/voice`: tools run before their grounded answer;
+      a barge cancels the tool. Navigation shows a hostname-only hint.
 - [x] Inline-call recovery: this model emits `emotion{name:<|"|>smile<|"|>}`
       instead of llama.cpp's `<|tool_call>` wrapper, so the parser turns those
       fragments into real calls and keeps them out of speech.
 - [x] `emotion` arrives as a WS frame and plays a one-shot expression on the dot
       (`smile`, `sad`, `surprise`, `ask`, `angry`, `laugh`).
 - [x] Replaced the failing curl-based search (DuckDuckGo 202 / Brave 429) with
-      `browse`/`navigate`, `browser_click`, `browser_type` and `browser_close`.
+      `browse`/`navigate`, `browser_click`, `browser_type`, `browser_snapshot`
+      and `browser_close` (explicit user request only; cleanup is server-owned).
       Playwright AI accessibility trees supply the refs used by actions, matching
-      the Playwright MCP pattern. Public pages only; see `BROWSING.md`.
+      the Playwright MCP pattern. Headed/minimized Chromium, headless fallback;
+      public pages only. See `BROWSING.md`.
 - [x] Same tool loop for `POST /api/chat`, with a `dot_tools` trace.
 - [ ] Local code execution (`run_code`) — deliberately deferred until it can be
       sandboxed; a fetched page must never be able to run code.

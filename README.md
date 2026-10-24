@@ -17,10 +17,14 @@ Speech recognition defaults to Spanish (`es-ES`), with Kokoro's `ef_dora` voice.
 
 See [PLAN.md](PLAN.md) for the design and [AGENTS.md](AGENTS.md) for contributor notes.
 
-## The dot
+## Features
 
-There is no text, no chrome, no background clutter. The whole interface is the dot:
+Local inference, Spanish voice by default, and almost nothing on screen:
 
+- **Hands-free conversation** — streaming speech recognition and synthesis, semantic
+  turn detection, interruption and backchannel handling. The mic stays open while armed.
+- **Local reasoning** — enabled by default, never spoken; optional public-page and
+  weather tools ground answers that need current information.
 - **Breathing core** — halo, voice sphere and perimeter all animate on the same blue–violet
   palette (hues 207–278).
 - **Dot states** — `starting` (pulsing), `ready` (steady), `loading_voice`, `listening`
@@ -31,46 +35,22 @@ There is no text, no chrome, no background clutter. The whole interface is the d
   - while the model **thinks**, it reads `pensando` with three softly pulsing dots;
   - while a **browser tool opens a page**, it shows just the **hostname** of the target
     (for example `elpais.com`), no "navigating", no verbs, no status copy;
-  - it hides itself when the answer starts or the browser action ends, and every
-    animation respects `prefers-reduced-motion`.
+  - the hostname clears when navigation ends; `pensando` remains while waiting
+    for the answer. Motion respects `prefers-reduced-motion`.
 
-![Dot thinking: "pensando"](docs/dot-thinking.png)
-
-![Dot while the browser opens a page: showing the hostname](docs/dot-browsing.png)
-
-![Dot speaking](docs/dot-speaking.png)
+### In pictures
 
 ![All four dot states with their hint line](docs/dot-states.png)
 
-## Conversation transcripts
-
-All new voice and `/api/chat` conversations append to **`.chat`** in this directory. It is
-a UTF-8 JSONL file (one timestamped event per line), grouped by `session` and, for voice,
-`turn`. It survives restarts and is ignored by Git.
-
-```bash
-tail -f .chat
-```
-
-`message` holds accepted user turns and HTTP messages. Voice diagnostics include
-`asr_partial`, `asr_final`, `asr_pause`, `assistant_generated` (full generated reply),
-`assistant_audio` (synthesized sentences, not proof they were heard),
-`assistant_history` (the internal conversation history), and `assistant_playback`
-(client-reported completion or interruption). Interrupted playback text is only a
-**sentence-level estimate**, not a word-exact transcript of what was heard.
-Controls, barge/backchannel decisions, errors and session boundaries are recorded
-too, even with `VOICE_DEBUG=0`. Manual cancellation/disconnect may have no playback
-position; the log does not invent one. HTTP requests that include prior messages
-record that context again under the new request's session ID.
-
-The file contains **private, unencrypted conversation text**, with owner-only file
-permissions. No raw audio is stored and no transcript is sent elsewhere or served by
-an HTTP endpoint. Disk writes run on a dedicated background thread, outside both audio
-executors, and drain on clean shutdown. Disk errors are reported in the app logs
-without stopping a conversation. There is no automatic retention limit; archive/remove
-the file while the app is stopped if needed.
+Full-size captures: [ready](docs/dot-ready.png) · [thinking](docs/dot-thinking.png) ·
+[browsing](docs/dot-browsing.png) · [speaking](docs/dot-speaking.png).
 
 ## Quick start
+
+**Requirements:** Apple Silicon macOS (MLX voice), `uv`, Python 3.12, the Hugging
+Face `hf` CLI for downloads, and a recent Metal-enabled `llama-server` supporting
+Gemma 4 and `--jinja`. Build instructions are [below](#llamacpp). This project was
+tested on an M5 with 24 GB unified memory; download sizes are not RAM requirements.
 
 ```bash
 ./run.sh
@@ -85,21 +65,51 @@ and downloads the missing models. To fetch everything up front:
 ./run.sh --fetch
 ```
 
-The GGUF weights (6.18 GB + optional drafter) live in `models/`. The speech models
-(~1.1 GB) go to the Hugging Face cache and load on the first voice turn.
+The fetch step downloads both GGUF files (6.18 GB target + 0.74 GB drafter), even
+though speculative decoding is off by default. They live in `models/`; speech
+models use the Hugging Face cache and load when voice is armed.
 
 ## What it runs
 
 | Piece | Default | Size |
 |---|---|---|
-| LLM | `nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB` Q4_K_M | 6.18 GB |
-| Drafter | `Nemotron-3.5-Bolt-E4B-DFlash-BF16.gguf` (opt‑in) | 0.74 GB |
+| LLM | [NVIDIA-Nemotron-3.5-Bolt-E4B-4GB](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB), Q4_K_M | 6.18 GB |
+| Drafter | [NVIDIA-Nemotron-3.5-Bolt-E4B-4GB-DFlash](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB-DFlash), BF16 (opt-in) | 0.74 GB |
 | VAD | `mlx-community/silero-vad` | ~2 MB |
+| Turn detection | `mlx-community/smart-turn-v3` | ~0.1 GB |
 | STT | `mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit` | ~0.76 GB |
 | TTS | `mlx-community/Kokoro-82M-8bit` | ~0.35 GB |
 
 `llama-server` listens on `127.0.0.1:1234`; the app listens on `127.0.0.1:8765`.
 The stock llama.cpp web UI is still reachable on 1234 while debugging.
+
+### NVIDIA target + draft models
+
+According to NVIDIA's linked model cards, Bolt is post-trained from Gemma-4-E4B-it,
+with **8B total / 4B effective parameters**. The target card lists up to 64K tokens
+for input/output; dot defaults to a **32,768-token context** and a 1,024-token
+completion budget. Sampling follows the card: temperature **1.0**, top-p **0.95**.
+Conversational mode keeps spoken answers concise.
+
+The companion DFlash checkpoint is **360M parameters**, five Qwen3-style decoder
+layers in a **736.81 MB BF16 GGUF**. It shares the target's embeddings and output
+head and **cannot run standalone**. It proposes up to seven candidate tokens per
+step for the target to verify. Both model cards specify
+[OpenMDW-1.1](https://openmdw.ai/license/1-1/) governing terms and note the underlying
+Gemma 4 Apache-2.0 terms; model licenses are separate from application code.
+
+To enable the included drafter:
+
+```bash
+./run.sh --fetch
+DFLASH=1 ./run.sh
+```
+
+If dot is attached to an already-running llama-server, restart that server with
+draft support first; an environment flag cannot reconfigure an attached process.
+DFlash remains opt-in because the [local Metal benchmark](#dflash-benchmark) did
+not show a reliable speedup. NVIDIA's RTX 5090 acceptance measurements are not
+Mac latency results.
 
 ### LAN access
 
@@ -108,11 +118,12 @@ Bind all interfaces and list the exact origin you will open, because
 
 ```bash
 DOT_HOST=0.0.0.0 \
-DOT_ALLOWED_ORIGINS=http://192.168.1.20:8765 \
+DOT_TLS=1 \
+DOT_ALLOWED_ORIGINS=https://192.168.1.20:8765 \
 ./run.sh
 ```
 
-The dot loads over plain HTTP, but **the microphone does not**: browsers expose
+Plain HTTP can load the dot, but **not the microphone**: browsers expose
 `getUserMedia` only on secure origins (`https://` or `localhost`). For voice on
 another device, add `DOT_TLS=1`; `run.sh` creates a self-signed certificate in
 `.tls/` (Git-ignored) valid for `localhost`, the machine's `*.local` name and its
@@ -158,10 +169,10 @@ The model runs with reasoning enabled by default:
 history or the reply — it only drives the transient `pensando` hint and an
 `assistant_reasoning` entry in the transcript.
 
-The default completion budget is `DOT_MAX_TOKENS=1024` (reasoning plus answer), so a
-long reasoning chain cannot consume the whole budget and leave the turn silent. If
-the model never emits content, the turn ends with a calm fallback line instead of
-silence.
+The default completion budget is `DOT_MAX_TOKENS=1024` (reasoning plus answer).
+Reasoning can still exhaust that shared budget. If a voice reply emits no content,
+the turn uses a brief fallback line instead of silence; this is not a separate
+reserved answer budget.
 
 ## Tools
 
@@ -177,8 +188,8 @@ The assistant can express emotion and operate an isolated browser:
 | `weather(place)` | Current weather and a three-day forecast from Open-Meteo |
 | `emotion` | Briefly changes the dot's expression: `smile`, `sad`, `surprise`, `ask`, `angry`, `laugh` |
 
-Tools are on by default. `DOT_TOOLS=0` disables all tools; `DOT_BROWSE=0` leaves only
-`emotion`. `DOT_SEARCH=0` is still honored as a deprecated browser-disable switch
+Tools are on by default. `DOT_TOOLS=0` disables all tools; `DOT_BROWSE=0` disables
+browser tools. `DOT_SEARCH=0` is still honored as a deprecated browser-disable switch
 unless `DOT_BROWSE` is explicitly set. A turn allows six tool rounds by default.
 Browser state persists across actions in a voice connection; HTTP tool loops get
 their own session, closed at the end of the request.
@@ -218,10 +229,10 @@ captcha/empty-page/HTTP failures must not be treated as verified facts. See
 - at most two concurrent browser sessions.
 
 The browser is **headed Chromium with its window minimized** (via CDP). Some sites,
-including `elpais.com` (DataDome), answer 403 to every headless Chromium variant; a
-headed browser receives the normal page. Without a GUI session the tool falls back to
-headless. The window is minimized immediately, so it never appears on screen. Details
-in [BROWSING.md](BROWSING.md).
+including `elpais.com` (DataDome), returned 403 to the headless variants tested while
+headed Chromium received the normal page. Access is not guaranteed. If headed
+launch fails, the tool falls back to headless. Minimization is best-effort: a brief
+window flash or Dock icon is possible. Details in [BROWSING.md](BROWSING.md).
 
 ## HTTP + WS
 
@@ -241,6 +252,16 @@ curl -s localhost:8765/api/chat \
   -d '{"prompt":"Saluda en cinco palabras."}' | jq -r '.choices[0].message.content'
 ```
 
+For multi-turn HTTP chat, send a `messages` array instead of `prompt`; the caller
+supplies history. The response follows llama.cpp's chat-completion shape with an
+additional `dot_tools` trace. This endpoint does not stream audio.
+
+Voice clients send `arm`/`disarm`/`cancel` controls and 20 ms mono int16 PCM frames.
+Playback uses `interrupt {turn_id, played_ms}` and `playback_done {turn_id}` to track
+the audible tail. Server JSON carries states, transcripts, reply deltas, TTS
+boundaries, barge-in, reasoning, browsing and emotion events; binary messages carry
+24 kHz mono int16 audio. See [AGENTS.md](AGENTS.md#voice-protocol) for the full protocol.
+
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -250,7 +271,8 @@ curl -s localhost:8765/api/chat \
 | `DOT_TLS` | off | `1` serves HTTPS with a generated self-signed certificate |
 | `LLAMA_HOST` / `LLAMA_PORT` | `127.0.0.1` / `1234` | llama.cpp bind |
 | `LLAMA_BIN` | `~/Projects/llama.cpp/build/bin/llama-server` | binary |
-| `MODEL` | `models/Nemotron-3.5-Bolt-E4B-4GB.gguf` | weights |
+| `MODEL` | `models/Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf` | target weights |
+| `DRAFTER` | `models/Nemotron-3.5-Bolt-E4B-DFlash-BF16.gguf` | draft weights; used only with `DFLASH=1` |
 | `CTX` | `32768` | context size |
 | `NGL` | `99` | GPU layers |
 | `KEEP_LLAMA=1` | off | leave llama.cpp running after exit |
@@ -319,8 +341,8 @@ about 0.7 s after that. Streaming transcripts trail the audio by ~0.7 s (the ASR
 model's look-ahead), which is why barge confirmation also uses speech duration
 rather than waiting for text.
 
-While it thinks, the hint line shows `pensando`; while it answers it is replaced by
-whatever the browser hint needs, and it never says the assistant's reasoning aloud.
+While waiting for an answer, the hint shows `pensando`; a navigation hostname takes
+priority while that action runs. Neither reasoning nor tool syntax is spoken.
 
 ## DFlash benchmark
 
@@ -347,6 +369,45 @@ DFLASH=1 ./run.sh
 drafter is enabled. A repeatable benchmark should stop the dot app first and use
 the same prompt across runs.
 
+## Privacy and transcripts
+
+Inference and audio processing run locally. Initial setup downloads models and
+Chromium; enabled browser/weather tools make network requests. Browsing sends the
+requested URL and interactions to that site; weather sends the place name to
+Open-Meteo. Set `DOT_TOOLS=0` for conversation without these network tools.
+
+Voice and HTTP conversations append to **`.chat`**, a private, unencrypted,
+owner-only JSONL file ignored by Git. It includes accepted messages, ASR diagnostics,
+reasoning, tool calls/results, generated/synthesized replies, playback reports,
+controls and errors, even with `VOICE_DEBUG=0`. HTTP history supplied by a caller
+is logged again for that request. No raw audio is stored, and the transcript file
+is not exposed by an HTTP endpoint. Model context and tool arguments can still
+include conversation-derived text.
+
+Generated text and synthesized audio do **not** prove playback. Interrupted text is
+only a sentence-level estimate; cancellation may have no playback position. Writes
+use a dedicated background thread and drain on clean shutdown. There is no retention
+limit: archive/remove `.chat` while the app is stopped. Inspect it locally with
+`tail -f .chat`; never commit it or publish it with diagnostics.
+
+The browser uses a fresh profile, not your personal cookies. Keep the app on
+loopback unless needed: origin checks are not authentication, and TLS does not make
+this a safe public service.
+
+## Limitations
+
+- Apple Silicon/MLX is the supported voice path; Linux/CUDA and Windows are not
+  validated end to end. First downloads and voice warmup take time.
+- The model can hallucinate, misread a page or exhaust its reasoning budget.
+  Current facts need successful tool evidence; blocked pages are not evidence.
+- Browsing is a restricted public-page reader, not account automation or a reliable
+  search engine. Captchas, paywalls, third-party assets and POST APIs may block it.
+  JavaScript remains enabled; disabling it did not fix the observed DataDome 403.
+- Echo cancellation affects interruption accuracy. Headphones help; ASR latency,
+  ambient noise and backchannels can still cause missed or unwanted turns.
+- DFlash gains are hardware/workload dependent, and the shared context is finite.
+  The assistant is not intended for safety-critical decisions.
+
 ## Troubleshooting
 
 - **Dot stays muted purple / `/health` says error** — check `logs/llama.log`; the JSON
@@ -363,6 +424,8 @@ the same prompt across runs.
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
+node --check static/app.js
+bash -n run.sh
 ```
 
 Browser tests exercise real Chromium against intercepted fixture pages (no network

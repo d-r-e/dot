@@ -4,7 +4,7 @@ Tools are disabled or enabled by environment variables (see the README).
 Results are plain text because one small local model reads them;
 JSON adds noise and the model is constrained to short spoken replies.
 
-Browser tools share an isolated headless Chromium session per conversation.
+Browser tools share an isolated Chromium session per conversation.
 Weather uses Open-Meteo's fixed endpoints, so a plain "¿qué tiempo hace?" never
 depends on a search engine. Failures are explicit; a blocked page is never
 treated as a search result.
@@ -167,7 +167,7 @@ def tool_specs() -> list[dict[str, Any]]:
     if _flag("DOT_BROWSE", _flag("DOT_SEARCH", True)):
         url = {"url": {"type": "string", "description": "URL HTTP(S) pública completa."}}
         ref = {"ref": {"type": "string", "description": "Referencia ARIA exacta [ref=eN] del árbol de accesibilidad de la última vista, por ejemplo e12."}}
-        navigation = "Abre una URL pública con Chromium headless y devuelve su árbol de accesibilidad con roles, nombres y referencias ARIA para interactuar. Conserva el estado en ese dominio. Si falla, no inventes datos."
+        navigation = "Abre una URL pública con Chromium y devuelve su árbol de accesibilidad con roles, nombres y referencias ARIA para interactuar. Conserva el estado en ese dominio. Si falla, no inventes datos."
         for name, description, properties in [
             ("browse", navigation + " Equivale a navigate.", url),
             ("navigate", navigation, url),

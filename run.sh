@@ -52,8 +52,13 @@ ensure_venv() {
   if [ ! -f "$VENV/.deps-ok" ] || [ requirements.txt -nt "$VENV/.deps-ok" ]; then
     echo "==> installing python dependencies"
     uv pip install --python "$VENV/bin/python" -r requirements.txt
-    "$VENV/bin/python" -m playwright install --only-shell chromium
     touch "$VENV/.deps-ok"
+  fi
+  # Upgrade existing headless-only environments as well as new installations.
+  # Reinstall after dependency updates so Chromium matches the pinned Playwright.
+  if [ ! -f "$VENV/.chromium-full-ok" ] || [ "$VENV/.deps-ok" -nt "$VENV/.chromium-full-ok" ]; then
+    "$VENV/bin/python" -m playwright install chromium
+    touch "$VENV/.chromium-full-ok"
   fi
 }
 
